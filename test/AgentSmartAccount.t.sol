@@ -1,0 +1,701 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test, console2} from "forge-std/Test.sol";
+import {AgentSmartAccount} from "../src/Wallet/AgentSmartAccount.sol";
+import {AgentAccountFactory} from "../src/Wallet/AgentAccountFactory.sol";
+import {SpendingPolicyLib} from "../src/Wallet/SpendingPolicyLib.sol";
+import {MockERC20} from "./helpers/MockERC20.sol";
+import {IEntryPoint} from "account-abstraction/interfaces/IEntryPoint.sol";
+import {PackedUserOperation} from "account-abstraction/interfaces/PackedUserOperation.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+
+contract AgentSmartAccountTest is Test {
+    using SpendingPolicyLib for mapping(address => bool);
+
+    AgentSmartAccount public implementation;
+    AgentAccountFactory public factory;
+    AgentSmartAccount public account;
+    MockERC20 public usdc;
+
+    // The canonical EntryPoint
+    address public constant ENTRY_POINT = 0x0000000071727De22E5E9d8BAf0edAc6f37da032;
+    address public owner;
+    uint256 public ownerKey;
+    address public operator;
+    uint256 public operatorKey;
+    address public stranger = makeAddr("stranger");
+
+    bytes32 public constant AGENT_ID = keccak256("test-agent-1");
+    uint256 public constant DAILY_LIMIT = 1000e6; // 1000 USDC
+    uint256 public expiresAt;
+
+    address public allowedTarget;
+    address public blockedTarget = makeAddr("blockedTarget");
+    mapping(address => bool) private testAllowedTargets;
+
+    function _validateTarget(address target) external view returns (bool) {
+        return testAllowedTargets.validateTarget(target);
+    }
+
+    function setUp() public {
+        // Generate owner and operator keys
+        (owner, ownerKey) = makeAddrAndKey("owner");
+        (operator, operatorKey) = makeAddrAndKey("operator");
+
+        // Deploy USDC mock
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        allowedTarget = address(usdc);
+
+        // Expiry: 30 days from now
+        expiresAt = block.timestamp + 30 days;
+
+        // Deploy implementation
+        implementation = new AgentSmartAccount();
+
+        // Deploy factory
+        factory = new AgentAccountFactory(address(implementation), ENTRY_POINT);
+
+        // Create account via factory
+        address accountAddr = factory.createAccount(owner, operator, AGENT_ID, DAILY_LIMIT, expiresAt);
+        account = AgentSmartAccount(payable(accountAddr));
+
+        // Owner sets allowed targets and tokens
+        vm.startPrank(owner);
+        account.setTargetAllowed(allowedTarget, true);
+        account.setTokenAllowed(address(usdc), true);
+        vm.stopPrank();
+
+        // Fund the smart account with USDC and ETH
+        usdc.mint(address(account), 10_000e6);
+        vm.deal(address(account), 10 ether);
+
+        // Label addresses for trace readability
+        vm.label(address(account), "AgentSmartAccount");
+        vm.label(address(usdc), "USDC");
+        vm.label(owner, "Owner");
+        vm.label(operator, "Operator");
+        vm.label(ENTRY_POINT, "EntryPoint");
+    }
+
+    // ==================== Initialization ====================
+
+    function test_Initialize_SetsCorrectState() public view {
+        assertEq(account.owner(), owner);
+        assertEq(account.operator(), operator);
+        assertEq(account.agentId(), AGENT_ID);
+        assertEq(account.factory(), address(factory));
+        assertTrue(account.isFactoryAccount());
+        SpendingPolicyLib.Policy memory pol = account.getPolicy();
+        assertEq(pol.dailyLimit, DAILY_LIMIT);
+        assertEq(pol.expiresAt, expiresAt);
+        assertEq(pol.requiresApprovalAbove, 0);
+    }
+
+    function test_Initialize_CannotReinitialize() public {
+        vm.expectRevert(); // Initializable: contract is already initialized
+        account.initialize(stranger, stranger, keccak256("x"), 1, 1);
+        assertEq(account.factory(), address(factory));
+        assertTrue(account.isFactoryAccount());
+    }
+
+    function test_Implementation_CannotBeInitialized() public {
+        vm.expectRevert(); // Initializable: contract is already initialized
+        implementation.initialize(stranger, stranger, keccak256("x"), 1, 1);
+    }
+
+    // ==================== Factory ====================
+
+    function test_Factory_PredictAddress() public view {
+        address predicted = factory.getAddress(owner, AGENT_ID);
+        assertEq(predicted, address(account));
+    }
+
+    function test_Factory_DuplicateReverts() public {
+        vm.expectRevert(); // Clones: clone already deployed
+        factory.createAccount(owner, operator, AGENT_ID, DAILY_LIMIT, expiresAt);
+    }
+
+    function test_Factory_DifferentAgentIdDifferentAddress() public {
+        bytes32 newAgentId = keccak256("agent-2");
+        address newAccount = factory.createAccount(owner, operator, newAgentId, DAILY_LIMIT, expiresAt);
+        assertTrue(newAccount != address(account));
+    }
+
+    // ==================== Policy validation: Target ====================
+
+    function test_PolicyTarget_AllowedTargetIsAllowed() public view {
+        assertTrue(account.isTargetAllowed(allowedTarget));
+    }
+
+    function test_PolicyTarget_BlockedTargetIsBlocked() public view {
+        assertFalse(account.isTargetAllowed(blockedTarget));
+    }
+
+    function test_PolicyTarget_OwnerCanUpdateTarget() public {
+        vm.prank(owner);
+        account.setTargetAllowed(blockedTarget, true);
+        assertTrue(account.isTargetAllowed(blockedTarget));
+
+        vm.prank(owner);
+        account.setTargetAllowed(blockedTarget, false);
+        assertFalse(account.isTargetAllowed(blockedTarget));
+    }
+
+    function test_PolicyTarget_StrangerCannotUpdateTarget() public {
+        vm.prank(stranger);
+        vm.expectRevert(AgentSmartAccount.OnlyOwner.selector);
+        account.setTargetAllowed(blockedTarget, true);
+    }
+
+    // ==================== Policy validation: Token ====================
+
+    function test_PolicyToken_AllowedTokenIsAllowed() public view {
+        assertTrue(account.isTokenAllowed(address(usdc)));
+    }
+
+    function test_PolicyToken_UnknownTokenIsBlocked() public view {
+        assertFalse(account.isTokenAllowed(address(0xdead)));
+    }
+
+    function test_PolicyToken_OwnerCanUpdateToken() public {
+        address newToken = makeAddr("newToken");
+
+        vm.prank(owner);
+        account.setTokenAllowed(newToken, true);
+        assertTrue(account.isTokenAllowed(newToken));
+
+        vm.prank(owner);
+        account.setTokenAllowed(newToken, false);
+        assertFalse(account.isTokenAllowed(newToken));
+    }
+
+    function test_PolicyToken_StrangerCannotUpdateToken() public {
+        vm.prank(stranger);
+        vm.expectRevert(AgentSmartAccount.OnlyOwner.selector);
+        account.setTokenAllowed(makeAddr("token"), true);
+    }
+
+    // ==================== Policy validation: Expiry ====================
+
+    function test_PolicyExpiry_NotExpiredPasses() public view {
+        SpendingPolicyLib.Policy memory pol = account.getPolicy();
+        assertTrue(block.timestamp <= pol.expiresAt);
+    }
+
+    function test_PolicyExpiry_UpdateExpiryWorks() public {
+        uint256 newExpiry = block.timestamp + 365 days;
+        vm.prank(owner);
+        account.updatePolicy(DAILY_LIMIT, newExpiry, 0);
+
+        SpendingPolicyLib.Policy memory pol = account.getPolicy();
+        assertEq(pol.expiresAt, newExpiry);
+    }
+
+    // ==================== Policy validation: Daily Limit ====================
+
+    function test_PolicyDailyLimit_DefaultIsCorrect() public view {
+        SpendingPolicyLib.Policy memory pol = account.getPolicy();
+        assertEq(pol.dailyLimit, DAILY_LIMIT);
+    }
+
+    function test_PolicyDailyLimit_UpdateWorks() public {
+        uint256 newLimit = 5000e6;
+        vm.prank(owner);
+        account.updatePolicy(newLimit, expiresAt, 0);
+
+        SpendingPolicyLib.Policy memory pol = account.getPolicy();
+        assertEq(pol.dailyLimit, newLimit);
+    }
+
+    // ==================== updatePolicy ====================
+
+    function test_UpdatePolicy_FullUpdate() public {
+        uint256 newLimit = 2000e6;
+        uint256 newExpiry = block.timestamp + 60 days;
+        uint256 newApproval = 500e6;
+
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit AgentSmartAccount.PolicyUpdated(newLimit, newExpiry, newApproval);
+
+        account.updatePolicy(newLimit, newExpiry, newApproval);
+
+        SpendingPolicyLib.Policy memory pol = account.getPolicy();
+        assertEq(pol.dailyLimit, newLimit);
+        assertEq(pol.expiresAt, newExpiry);
+        assertEq(pol.requiresApprovalAbove, newApproval);
+    }
+
+    function test_UpdatePolicy_RevertNotOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert(AgentSmartAccount.OnlyOwner.selector);
+        account.updatePolicy(1, 1, 1);
+    }
+
+    function test_UpdatePolicy_OperatorCannotUpdate() public {
+        vm.prank(operator);
+        vm.expectRevert(AgentSmartAccount.OnlyOwner.selector);
+        account.updatePolicy(1, 1, 1);
+    }
+
+    // ==================== execute ====================
+
+    function test_Execute_RevertNotEntryPoint() public {
+        vm.prank(owner);
+        vm.expectRevert(AgentSmartAccount.OnlyEntryPoint.selector);
+        account.execute(allowedTarget, 0, "");
+    }
+
+    function test_Execute_RevertStrangerNotEntryPoint() public {
+        vm.prank(stranger);
+        vm.expectRevert(AgentSmartAccount.OnlyEntryPoint.selector);
+        account.execute(allowedTarget, 0, "");
+    }
+
+    function test_Execute_SuccessViaEntryPoint() public {
+        address recipient = makeAddr("recipient");
+        uint256 transferAmount = 100e6;
+
+        bytes memory transferData = abi.encodeWithSelector(
+            usdc.transfer.selector,
+            recipient,
+            transferAmount
+        );
+
+        vm.prank(ENTRY_POINT);
+        account.execute(address(usdc), 0, transferData);
+
+        assertEq(usdc.balanceOf(recipient), transferAmount);
+    }
+
+    function test_EndToEnd_TwoAgents_TransferUsdc_ViaValidationAndExecute() public {
+        // Deploy a second agent account (receiver)
+        (address owner2,) = makeAddrAndKey("owner2");
+        (address operator2,) = makeAddrAndKey("operator2");
+        bytes32 agentId2 = keccak256("test-agent-2");
+        address account2Addr = factory.createAccount(owner2, operator2, agentId2, DAILY_LIMIT, expiresAt);
+        AgentSmartAccount account2 = AgentSmartAccount(payable(account2Addr));
+
+        // SpendingPolicyLib target validation should allow factory-created accounts
+        assertTrue(this._validateTarget(address(account2)));
+
+        uint256 amount = 123e6;
+
+        // Build inner ERC20 transfer
+        bytes memory transferData = abi.encodeWithSelector(
+            usdc.transfer.selector,
+            address(account2),
+            amount
+        );
+
+        // Build account execute callData
+        bytes memory callData = abi.encodeWithSelector(
+            account.execute.selector,
+            address(usdc),
+            0,
+            transferData
+        );
+
+        // Create and sign UserOp hash
+        bytes32 userOpHash = keccak256(callData);
+        bytes32 ethSignedHash =
+            keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", userOpHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, ethSignedHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        PackedUserOperation memory op = PackedUserOperation({
+            sender: address(account),
+            nonce: 0,
+            initCode: "",
+            callData: callData,
+            accountGasLimits: bytes32(0),
+            preVerificationGas: 0,
+            gasFees: bytes32(0),
+            paymasterAndData: "",
+            signature: signature
+        });
+
+        // Validate via EntryPoint (enforces SpendingPolicyLib)
+        vm.prank(ENTRY_POINT);
+        uint256 validation = account.validateUserOp(op, userOpHash, 0);
+        assertEq(validation, 0);
+
+        // Execute via EntryPoint
+        vm.prank(ENTRY_POINT);
+        account.execute(address(usdc), 0, transferData);
+
+        assertEq(usdc.balanceOf(address(account2)), amount);
+        SpendingPolicyLib.DailySpend memory ds = account.getDailySpend();
+        assertEq(ds.amount, amount);
+    }
+
+    // ==================== executeBatch ====================
+
+    function test_ExecuteBatch_RevertNotEntryPoint() public {
+        address[] memory dests = new address[](1);
+        dests[0] = allowedTarget;
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory funcs = new bytes[](1);
+
+        vm.prank(stranger);
+        vm.expectRevert(AgentSmartAccount.OnlyEntryPoint.selector);
+        account.executeBatch(dests, values, funcs);
+    }
+
+    function test_ExecuteBatch_RevertLengthMismatch() public {
+        address[] memory dests = new address[](2);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory funcs = new bytes[](2);
+
+        vm.prank(ENTRY_POINT);
+        vm.expectRevert(AgentSmartAccount.BatchLengthMismatch.selector);
+        account.executeBatch(dests, values, funcs);
+    }
+
+    function test_ExecuteBatch_SuccessViaEntryPoint() public {
+        address recipient1 = makeAddr("recipient1");
+        address recipient2 = makeAddr("recipient2");
+
+        address[] memory dests = new address[](2);
+        dests[0] = address(usdc);
+        dests[1] = address(usdc);
+
+        uint256[] memory values = new uint256[](2);
+        values[0] = 0;
+        values[1] = 0;
+
+        bytes[] memory funcs = new bytes[](2);
+        funcs[0] = abi.encodeWithSelector(usdc.transfer.selector, recipient1, 50e6);
+        funcs[1] = abi.encodeWithSelector(usdc.transfer.selector, recipient2, 75e6);
+
+        vm.prank(ENTRY_POINT);
+        account.executeBatch(dests, values, funcs);
+
+        assertEq(usdc.balanceOf(recipient1), 50e6);
+        assertEq(usdc.balanceOf(recipient2), 75e6);
+    }
+
+    // ==================== EntryPoint ====================
+
+    function test_EntryPoint_ReturnsCanonical() public view {
+        assertEq(address(account.entryPoint()), ENTRY_POINT);
+    }
+
+    // ==================== Receive ETH ====================
+
+    function test_ReceiveETH() public {
+        uint256 balBefore = address(account).balance;
+        vm.deal(stranger, 1 ether);
+        vm.prank(stranger);
+        (bool success,) = address(account).call{value: 1 ether}("");
+        assertTrue(success);
+        assertEq(address(account).balance, balBefore + 1 ether);
+    }
+
+    // ==================== DailySpend tracking ====================
+
+    function test_DailySpend_InitialValues() public view {
+        SpendingPolicyLib.DailySpend memory ds = account.getDailySpend();
+        assertEq(ds.amount, 0);
+        // lastReset should be set at initialization time
+        assertTrue(ds.lastReset > 0);
+    }
+
+    // ==================== Events ====================
+
+    function test_SetTargetAllowed_EmitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true);
+        emit AgentSmartAccount.TargetAllowedUpdated(blockedTarget, true);
+        account.setTargetAllowed(blockedTarget, true);
+    }
+
+    function test_SetTokenAllowed_EmitsEvent() public {
+        address token = makeAddr("token");
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true);
+        emit AgentSmartAccount.TokenAllowedUpdated(token, true);
+        account.setTokenAllowed(token, true);
+    }
+
+    function test_Execute_EmitsEvent() public {
+        address recipient = makeAddr("recipient");
+        bytes memory data = abi.encodeWithSelector(usdc.transfer.selector, recipient, 10e6);
+
+        vm.prank(ENTRY_POINT);
+        vm.expectEmit(true, false, false, true);
+        emit AgentSmartAccount.Executed(address(usdc), 0, data);
+        account.execute(address(usdc), 0, data);
+    }
+
+    function test_ExecuteBatch_EmitsEvent() public {
+        address[] memory dests = new address[](1);
+        dests[0] = address(usdc);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory funcs = new bytes[](1);
+        funcs[0] = abi.encodeWithSelector(usdc.transfer.selector, makeAddr("r"), 1e6);
+
+        vm.prank(ENTRY_POINT);
+        vm.expectEmit(false, false, false, true);
+        emit AgentSmartAccount.BatchExecuted(1);
+        account.executeBatch(dests, values, funcs);
+    }
+
+    // ==================== EIP-1271 isValidSignature ====================
+
+    function test_IsValidSignature_ValidOperatorSignature() public {
+        bytes32 hash = keccak256("test-message");
+
+        // Sign with operator's private key
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, hash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        // Should return the EIP-1271 magic value
+        bytes4 result = account.isValidSignature(hash, signature);
+        assertEq(result, bytes4(0x1626ba7e), "Should return EIP-1271 magic value for valid operator signature");
+    }
+
+    function test_IsValidSignature_InvalidSigner() public {
+        bytes32 hash = keccak256("test-message");
+
+        // Sign with a non-operator private key (use stranger)
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(12345, hash); // Random private key, not operator
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        // Should return invalid magic value
+        bytes4 result = account.isValidSignature(hash, signature);
+        assertEq(result, bytes4(0xffffffff), "Should return invalid magic value for non-operator signature");
+    }
+
+    function test_IsValidSignature_MalformedSignature() public {
+        bytes32 hash = keccak256("test-message");
+        bytes memory invalidSig = new bytes(64); // Too short (needs 65 bytes for r, s, v)
+
+        // ECDSA.recover will revert on invalid signature length
+        vm.expectRevert();
+        account.isValidSignature(hash, invalidSig);
+    }
+
+    function test_IsValidSignature_EmptySignature() public {
+        bytes32 hash = keccak256("test-message");
+        bytes memory emptySig = new bytes(0);
+
+        // ECDSA.recover will revert on empty signature
+        vm.expectRevert();
+        account.isValidSignature(hash, emptySig);
+    }
+
+    function test_IsValidSignature_DifferentHash() public {
+        bytes32 hash1 = keccak256("test-message-1");
+        bytes32 hash2 = keccak256("test-message-2");
+
+        // Sign hash1 with operator
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, hash1);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        // Try to verify with hash2 (should fail)
+        bytes4 result = account.isValidSignature(hash2, signature);
+        assertEq(result, bytes4(0xffffffff), "Should return invalid magic value when signature is for different hash");
+    }
+
+    function test_IsValidSignature_NoStateMutation() public {
+        bytes32 hash = keccak256("test-message");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, hash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        // Get initial state
+        SpendingPolicyLib.Policy memory policyBefore = account.getPolicy();
+        SpendingPolicyLib.DailySpend memory dailyBefore = account.getDailySpend();
+
+        // Call isValidSignature (view function)
+        account.isValidSignature(hash, signature);
+
+        // Verify no state changed
+        SpendingPolicyLib.Policy memory policyAfter = account.getPolicy();
+        SpendingPolicyLib.DailySpend memory dailyAfter = account.getDailySpend();
+
+        assertEq(policyBefore.dailyLimit, policyAfter.dailyLimit);
+        assertEq(policyBefore.expiresAt, policyAfter.expiresAt);
+        assertEq(dailyBefore.amount, dailyAfter.amount);
+    }
+
+    // ==================== Global Trusted Contracts ====================
+
+    function test_GlobalTrusted_TargetBypassesAllowlist() public {
+        // Create a new target that is NOT in per-agent allowlist
+        address globalTarget = makeAddr("globalTarget");
+        assertFalse(account.isTargetAllowed(globalTarget));
+
+        // Set it as globally trusted on the factory
+        factory.setTrustedContract(globalTarget, true);
+
+        // Build a UserOp calling the global target
+        bytes memory callData = abi.encodeWithSelector(
+            account.execute.selector,
+            globalTarget,
+            0,
+            "" // empty call
+        );
+
+        // Sign with operator
+        bytes32 userOpHash = keccak256(callData);
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", userOpHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, ethSignedHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        PackedUserOperation memory op = PackedUserOperation({
+            sender: address(account),
+            nonce: 0,
+            initCode: "",
+            callData: callData,
+            accountGasLimits: bytes32(0),
+            preVerificationGas: 0,
+            gasFees: bytes32(0),
+            paymasterAndData: "",
+            signature: signature
+        });
+
+        // Validate via EntryPoint - should succeed because target is globally trusted
+        vm.prank(ENTRY_POINT);
+        uint256 validation = account.validateUserOp(op, userOpHash, 0);
+        assertEq(validation, 0, "Global trusted target should pass validation");
+    }
+
+    function test_GlobalTrusted_TokenBypassesAllowlist() public {
+        // Deploy a new mock token that is NOT in per-agent token allowlist
+        MockERC20 newToken = new MockERC20("New Token", "NEW", 6);
+        newToken.mint(address(account), 1000e6);
+
+        // Verify it's not in per-agent allowlist
+        assertFalse(account.isTokenAllowed(address(newToken)));
+
+        // Set the token as globally trusted (both as target and token)
+        factory.setTrustedContract(address(newToken), true);
+        factory.setTrustedToken(address(newToken), true);
+
+        // Build a transfer call
+        address recipient = makeAddr("recipient");
+        bytes memory transferData = abi.encodeWithSelector(
+            newToken.transfer.selector,
+            recipient,
+            10e6
+        );
+        bytes memory callData = abi.encodeWithSelector(
+            account.execute.selector,
+            address(newToken),
+            0,
+            transferData
+        );
+
+        // Sign with operator
+        bytes32 userOpHash = keccak256(callData);
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", userOpHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, ethSignedHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        PackedUserOperation memory op = PackedUserOperation({
+            sender: address(account),
+            nonce: 0,
+            initCode: "",
+            callData: callData,
+            accountGasLimits: bytes32(0),
+            preVerificationGas: 0,
+            gasFees: bytes32(0),
+            paymasterAndData: "",
+            signature: signature
+        });
+
+        // Validate via EntryPoint - should succeed
+        vm.prank(ENTRY_POINT);
+        uint256 validation = account.validateUserOp(op, userOpHash, 0);
+        assertEq(validation, 0, "Global trusted token should pass validation");
+    }
+
+    function test_GlobalTrusted_UntrustedTargetStillFails() public {
+        // Create a target that is neither in per-agent allowlist nor globally trusted
+        address untrustedTarget = makeAddr("untrustedTarget");
+        assertFalse(account.isTargetAllowed(untrustedTarget));
+        assertFalse(factory.isTrustedContract(untrustedTarget));
+
+        // Build a UserOp calling the untrusted target
+        bytes memory callData = abi.encodeWithSelector(
+            account.execute.selector,
+            untrustedTarget,
+            0,
+            ""
+        );
+
+        // Sign with operator
+        bytes32 userOpHash = keccak256(callData);
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", userOpHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, ethSignedHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        PackedUserOperation memory op = PackedUserOperation({
+            sender: address(account),
+            nonce: 0,
+            initCode: "",
+            callData: callData,
+            accountGasLimits: bytes32(0),
+            preVerificationGas: 0,
+            gasFees: bytes32(0),
+            paymasterAndData: "",
+            signature: signature
+        });
+
+        // Validate via EntryPoint - should FAIL (return 1)
+        vm.prank(ENTRY_POINT);
+        uint256 validation = account.validateUserOp(op, userOpHash, 0);
+        assertEq(validation, 1, "Untrusted target should fail validation");
+    }
+
+    function test_GlobalTrusted_BatchWithMixedTargets() public {
+        // One target is globally trusted, one is per-agent allowed
+        address globalTarget = makeAddr("globalTarget");
+        factory.setTrustedContract(globalTarget, true);
+
+        // Build batch call with both USDC (per-agent allowed) and globalTarget
+        address[] memory dests = new address[](2);
+        dests[0] = address(usdc); // per-agent allowed
+        dests[1] = globalTarget;  // globally trusted
+
+        uint256[] memory values = new uint256[](2);
+        values[0] = 0;
+        values[1] = 0;
+
+        bytes[] memory funcs = new bytes[](2);
+        funcs[0] = abi.encodeWithSelector(usdc.transfer.selector, makeAddr("r1"), 1e6);
+        funcs[1] = ""; // empty call
+
+        bytes memory callData = abi.encodeWithSelector(
+            bytes4(keccak256("executeBatch(address[],uint256[],bytes[])")),
+            dests,
+            values,
+            funcs
+        );
+
+        // Sign with operator
+        bytes32 userOpHash = keccak256(callData);
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", userOpHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, ethSignedHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        PackedUserOperation memory op = PackedUserOperation({
+            sender: address(account),
+            nonce: 0,
+            initCode: "",
+            callData: callData,
+            accountGasLimits: bytes32(0),
+            preVerificationGas: 0,
+            gasFees: bytes32(0),
+            paymasterAndData: "",
+            signature: signature
+        });
+
+        // Validate - should succeed since both targets are allowed (one per-agent, one global)
+        vm.prank(ENTRY_POINT);
+        uint256 validation = account.validateUserOp(op, userOpHash, 0);
+        assertEq(validation, 0, "Batch with mixed allowed targets should pass");
+    }
+}
