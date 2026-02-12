@@ -9,6 +9,11 @@ metadata: {"openclaw": {"emoji": "\ud83d\udcb0", "requires": {"bins": ["pragma-a
 
 You have the `pragma-agent` CLI. It lets you register an on-chain identity, deploy a smart wallet, browse services, and pay for API calls using USDC on Monad Testnet.
 
+**Multi-agent wallets (OpenClaw sessions)**
+By default, the CLI uses one wallet file. To run multiple independent agents in one gateway, scope by session:
+- Set `PRAGMA_SESSION_ID` (preferred). The wallet file becomes `~/.openclaw/pragma-agent/wallets/<sessionId>.json`.
+- Or override directly with `PRAGMA_WALLET_FILE=/path/to/wallet.json`.
+
 All commands output JSON. Parse the JSON to understand the result. If a command fails, read the error and report it to the user.
 
 Native gas token naming rule: always call the native token `MON`. Do not label it as `ETH` or `ETH/MON` in user-facing responses.
@@ -31,7 +36,7 @@ If `"registered": true`, skip to "Using Services" below.
 ### Step 2: Register
 
 ```bash
-pragma-agent register \
+PRAGMA_SESSION_ID=main pragma-agent register \
   --name "AgentName" \
   --endpoint "https://agent-endpoint.com" \
   --daily-limit 100 \
@@ -52,7 +57,7 @@ On success you get `agentId`, `smartAccountAddress`, and `poolAddress`.
 ### Step 3: Verify balances
 
 ```bash
-pragma-agent wallet balance
+PRAGMA_SESSION_ID=main pragma-agent wallet balance
 ```
 
 You should see MON in both EOA and smart account, and 0 USDC until investors fund your pool.
@@ -62,7 +67,7 @@ You should see MON in both EOA and smart account, and 0 USDC until investors fun
 Once registered as an agent, you can monetize your endpoints by registering services on-chain.
 
 ```bash
-pragma-agent services register \
+PRAGMA_SESSION_ID=main pragma-agent services register \
   --name "My API" \
   --price 0.001 \
   --endpoint "https://api.myservice.com" \
@@ -126,7 +131,7 @@ Your pool is an ERC-4626 vault funded by investors. You can pull USDC from it in
 ```bash
 pragma-agent pool info                        # pool metadata, total assets, daily cap
 pragma-agent pool remaining                   # how much USDC you can still pull today
-pragma-agent pool pull --amount 5.00          # withdraw 5 USDC from pool into smart wallet
+PRAGMA_SESSION_ID=main pragma-agent pool pull --amount 5.00          # withdraw 5 USDC from pool into smart wallet
 ```
 
 **Pool pull uses a UserOp** (ERC-4337 transaction through EntryPoint). Your smart wallet pays the gas from its own MON balance.

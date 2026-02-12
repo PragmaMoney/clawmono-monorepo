@@ -14,16 +14,47 @@ import {
 
 const WALLET_DIR = path.join(os.homedir(), ".openclaw", "pragma-agent");
 const DEFAULT_WALLET_FILE = "wallet.json";
+const WALLET_SUBDIR = "wallets";
 
 /**
  * Get the full path for a wallet file.
  */
-function getWalletPath(filename: string = DEFAULT_WALLET_FILE): string {
-  return path.join(WALLET_DIR, filename);
+function resolveWalletPath(filenameOrPath: string): string {
+  let p = filenameOrPath;
+  if (p.startsWith("~")) {
+    p = path.join(os.homedir(), p.slice(1));
+  }
+  if (path.isAbsolute(p)) return p;
+  return path.join(WALLET_DIR, p);
+}
+
+function sanitizeSessionId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function getDefaultWalletPath(): string {
+  const override = process.env.PRAGMA_WALLET_FILE;
+  if (override && override.trim().length > 0) {
+    return resolveWalletPath(override.trim());
+  }
+
+  const sessionId =
+    process.env.PRAGMA_SESSION_ID ||
+    process.env.OPENCLAW_SESSION_ID ||
+    process.env.OPENCLAW_SESSION ||
+    process.env.OPENCLAW_AGENT_ID ||
+    process.env.OPENCLAW_AGENT;
+
+  if (sessionId && sessionId.trim().length > 0) {
+    const safe = sanitizeSessionId(sessionId.trim());
+    return path.join(WALLET_DIR, WALLET_SUBDIR, `${safe}.json`);
+  }
+
+  return resolveWalletPath(DEFAULT_WALLET_FILE);
 }
 
 // Backward compatibility
-const WALLET_FILE = getWalletPath();
+const WALLET_FILE = getDefaultWalletPath();
 
 interface Registration {
   agentId: string;
@@ -44,8 +75,8 @@ interface WalletData {
 /**
  * Load or create a wallet from a specific file.
  */
-function loadOrCreateWalletByFile(filename: string): WalletData {
-  const walletPath = getWalletPath(filename);
+function loadOrCreateWalletByFile(filenameOrPath: string): WalletData {
+  const walletPath = resolveWalletPath(filenameOrPath);
   if (fs.existsSync(walletPath)) {
     const raw = fs.readFileSync(walletPath, "utf-8");
     const data = JSON.parse(raw) as WalletData;
@@ -65,7 +96,7 @@ function loadOrCreateWalletByFile(filename: string): WalletData {
     registration: null,
   };
 
-  fs.mkdirSync(WALLET_DIR, { recursive: true });
+  fs.mkdirSync(path.dirname(walletPath), { recursive: true });
   fs.writeFileSync(walletPath, JSON.stringify(data, null, 2), "utf-8");
   return data;
 }
@@ -73,18 +104,18 @@ function loadOrCreateWalletByFile(filename: string): WalletData {
 /**
  * Save registration data to a specific wallet file.
  */
-function saveRegistrationByFile(filename: string, reg: Registration): void {
-  const data = loadOrCreateWalletByFile(filename);
+function saveRegistrationByFile(filenameOrPath: string, reg: Registration): void {
+  const data = loadOrCreateWalletByFile(filenameOrPath);
   data.registration = reg;
-  const walletPath = getWalletPath(filename);
+  const walletPath = resolveWalletPath(filenameOrPath);
   fs.writeFileSync(walletPath, JSON.stringify(data, null, 2), "utf-8");
 }
 
 /**
  * Get registration data from a specific wallet file.
  */
-function getRegistrationByFile(filename: string): Registration | null {
-  const data = loadOrCreateWalletByFile(filename);
+function getRegistrationByFile(filenameOrPath: string): Registration | null {
+  const data = loadOrCreateWalletByFile(filenameOrPath);
   return data.registration;
 }
 
@@ -94,7 +125,7 @@ function getRegistrationByFile(filename: string): Registration | null {
  * loads from the saved file.
  */
 function loadOrCreateWallet(): WalletData {
-  return loadOrCreateWalletByFile(DEFAULT_WALLET_FILE);
+  return loadOrCreateWalletByFile(getDefaultWalletPath());
 }
 
 /**
@@ -103,7 +134,7 @@ function loadOrCreateWallet(): WalletData {
 function saveRegistration(reg: Registration): void {
   const data = loadOrCreateWallet();
   data.registration = reg;
-  fs.writeFileSync(WALLET_FILE, JSON.stringify(data, null, 2), "utf-8");
+  fs.writeFileSync(getDefaultWalletPath(), JSON.stringify(data, null, 2), "utf-8");
 }
 
 /**

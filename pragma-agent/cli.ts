@@ -77,10 +77,18 @@ Examples:
   pragma-agent call --service-id 0x... --method POST --body '{"key":"val"}'
 
 Environment:
-  PIMLICO_API_KEY   Pimlico bundler API key (required for UserOps)
-  RELAYER_URL       Proxy relayer URL (default: http://localhost:4402)`);
+  BUNDLER_URL          Bundler URL (required for UserOps)
+  RELAYER_URL          Proxy relayer URL (default: http://localhost:4402)
+  PRAGMA_SESSION_ID    Session ID → per-session wallet file (OpenClaw)
+  PRAGMA_WALLET_FILE   Override wallet file path`);
     process.exit(0);
   }
+
+  // Optional: per-session wallet scoping
+  const sessionIdFlag = getFlag(args, "session-id");
+  const walletFileFlag = getFlag(args, "wallet-file");
+  if (sessionIdFlag) process.env.PRAGMA_SESSION_ID = sessionIdFlag;
+  if (walletFileFlag) process.env.PRAGMA_WALLET_FILE = walletFileFlag;
 
   let result: string;
 
