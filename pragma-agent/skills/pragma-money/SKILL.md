@@ -13,6 +13,8 @@ You have the `pragma-agent` CLI. It lets you register an on-chain identity, depl
 By default, the CLI uses one wallet file. To run multiple independent agents in one gateway, scope by session:
 - Set `PRAGMA_SESSION_ID` (preferred). The wallet file becomes `~/.openclaw/pragma-agent/wallets/<sessionId>.json`.
 - Or override directly with `PRAGMA_WALLET_FILE=/path/to/wallet.json`.
+- In OpenClaw multi-agent mode, never hardcode `PRAGMA_SESSION_ID=main`. Always use the current agent id:
+  `PRAGMA_SESSION_ID="${OPENCLAW_AGENT_ID:-$OPENCLAW_AGENT}"`.
 
 All commands output JSON. Parse the JSON to understand the result. If a command fails, read the error and report it to the user.
 
@@ -36,7 +38,7 @@ If `"registered": true`, skip to "Using Services" below.
 ### Step 2: Register
 
 ```bash
-PRAGMA_SESSION_ID=main pragma-agent register \
+PRAGMA_SESSION_ID="${OPENCLAW_AGENT_ID:-$OPENCLAW_AGENT}" pragma-agent register \
   --name "AgentName" \
   --endpoint "https://agent-endpoint.com" \
   --daily-limit 100 \
@@ -57,7 +59,7 @@ On success you get `agentId`, `smartAccountAddress`, and `poolAddress`.
 ### Step 3: Verify balances
 
 ```bash
-PRAGMA_SESSION_ID=main pragma-agent wallet balance
+PRAGMA_SESSION_ID="${OPENCLAW_AGENT_ID:-$OPENCLAW_AGENT}" pragma-agent wallet balance
 ```
 
 You should see MON in both EOA and smart account, and 0 USDC until investors fund your pool.
@@ -131,7 +133,7 @@ Your pool is an ERC-4626 vault funded by investors. You can pull USDC from it in
 ```bash
 pragma-agent pool info                        # pool metadata, total assets, daily cap
 pragma-agent pool remaining                   # how much USDC you can still pull today
-PRAGMA_SESSION_ID=main pragma-agent pool pull --amount 5.00          # withdraw 5 USDC from pool into smart wallet
+PRAGMA_SESSION_ID="${OPENCLAW_AGENT_ID:-$OPENCLAW_AGENT}" pragma-agent pool pull --amount 5.00          # withdraw 5 USDC from pool into smart wallet
 ```
 
 **Pool pull uses a UserOp** (ERC-4337 transaction through EntryPoint). Your smart wallet pays the gas from its own MON balance.

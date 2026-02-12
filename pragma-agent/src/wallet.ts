@@ -32,18 +32,41 @@ function sanitizeSessionId(id: string): string {
   return id.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function inferSessionIdFromSessionKey(raw?: string): string | null {
+  if (!raw) return null;
+  const m = raw.match(/(?:^|:)agent:([^:]+)/);
+  if (!m || !m[1]) return null;
+  return m[1];
+}
+
+function inferSessionIdFromCwd(cwd: string): string | null {
+  // bot2 workspace pattern: ~/.openclaw/workspaces/<agentId>
+  const m = cwd.match(/\/\.openclaw\/workspaces\/([^/]+)/);
+  if (m && m[1]) return m[1];
+
+  // default main workspace pattern: ~/.openclaw/workspace
+  if (cwd.includes("/.openclaw/workspace")) return "main";
+
+  return null;
+}
+
 function getDefaultWalletPath(): string {
   const override = process.env.PRAGMA_WALLET_FILE;
   if (override && override.trim().length > 0) {
     return resolveWalletPath(override.trim());
   }
 
-  const sessionId =
-    process.env.PRAGMA_SESSION_ID ||
-    process.env.OPENCLAW_SESSION_ID ||
-    process.env.OPENCLAW_SESSION ||
-    process.env.OPENCLAW_AGENT_ID ||
-    process.env.OPENCLAW_AGENT;
+  const sessionIdCandidates = [
+    process.env.PRAGMA_SESSION_ID,
+    process.env.OPENCLAW_AGENT_ID,
+    process.env.OPENCLAW_AGENT,
+    inferSessionIdFromSessionKey(process.env.OPENCLAW_SESSION_KEY),
+    process.env.OPENCLAW_SESSION_ID,
+    process.env.OPENCLAW_SESSION,
+    inferSessionIdFromCwd(process.cwd()),
+  ];
+
+  const sessionId = sessionIdCandidates.find((v) => v && v.trim().length > 0);
 
   if (sessionId && sessionId.trim().length > 0) {
     const safe = sanitizeSessionId(sessionId.trim());
@@ -327,6 +350,7 @@ export {
   getRegistration,
   getRegistrationByFile,
   requireRegistration,
-  getWalletPath,
+  resolveWalletPath,
+  getDefaultWalletPath,
 };
 export type { Registration, WalletData };
