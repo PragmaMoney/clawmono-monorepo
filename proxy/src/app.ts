@@ -15,6 +15,9 @@ import { registerAgentRouter } from "./routes/registerAgent.js";
 import { fundAgentRouter } from "./routes/fundAgent.js";
 import { registerServiceRouter } from "./routes/registerService.js";
 import { allowTargetRouter } from "./routes/allowTarget.js";
+import { simulationRouter } from "./routes/simulation.js";
+import swaggerUi from "swagger-ui-express";
+import swaggerJSDoc from "swagger-jsdoc";
 
 // ---------------------------------------------------------------------------
 // Express App
@@ -131,6 +134,29 @@ app.use("/register-service", registerServiceRouter);
 
 // Generic target approval for smart accounts (used by pool invest, etc.)
 app.use("/allow-target", allowTargetRouter);
+
+// ---------------------------------------------------------------------------
+// Simulation Routes (admin)
+// ---------------------------------------------------------------------------
+
+app.use("/sim", adminAuth(), simulationRouter);
+
+// ---------------------------------------------------------------------------
+// Swagger Docs
+// ---------------------------------------------------------------------------
+
+const swaggerSpec = swaggerJSDoc({
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "PragmaMoney Proxy API",
+      version: "0.1.0",
+    },
+  },
+  apis: ["./src/routes/*.ts"],
+});
+
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ---------------------------------------------------------------------------
 // Proxy Routes (payment-gated)

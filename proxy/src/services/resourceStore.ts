@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Resource, ServiceType, ResourcePricing } from "../types/x402.js";
 import { createResource } from "../models/Resource.js";
 
@@ -12,7 +11,6 @@ import { createResource } from "../models/Resource.js";
  * build PaymentRequirements.
  */
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORE_FILE = path.resolve(__dirname, "../../data/resources.json");
 
 const store = new Map<string, Resource>();

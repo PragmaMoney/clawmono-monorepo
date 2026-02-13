@@ -74,7 +74,8 @@ export function useAgentPool(poolAddress: Address | undefined, userAddress: Addr
         publicClient.readContract({ address: poolAddress, abi: AGENT_POOL_ABI, functionName: "vestingDuration" }),
         publicClient.readContract({ address: poolAddress, abi: AGENT_POOL_ABI, functionName: "agentRevoked" }),
         publicClient.readContract({ address: poolAddress, abi: AGENT_POOL_ABI, functionName: "metadataURI" }),
-        publicClient.readContract({ address: poolAddress, abi: AGENT_POOL_ABI, functionName: "convertToAssets", args: [BigInt(1e18)] }),
+        // ERC-4626 shares use the same decimals as the asset (USDC = 6)
+        publicClient.readContract({ address: poolAddress, abi: AGENT_POOL_ABI, functionName: "convertToAssets", args: [BigInt(1e6)] }),
       ]);
 
       // Fetch agent info from IdentityRegistry

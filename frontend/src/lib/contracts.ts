@@ -4,10 +4,10 @@ import { Address } from "viem";
 export const USDC_ADDRESS: Address = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
 export const GATEWAY_ADDRESS: Address = "0x8887dD91C983b2c647a41DEce32c34E79c7C33df";
 export const SERVICE_REGISTRY_ADDRESS: Address = "0xCd5792dDdd3A7b98221223EFE5aCbC302a20A76e";
-export const AGENT_FACTORY_ADDRESS: Address = "0x2Cd3c8D045b29B1baC914722D85419964DBD79B7";
+export const AGENT_FACTORY_ADDRESS: Address = "0x84277eA30ec0a43ED362904308C0A72bF5269196";
 
 // AgentFactory (Launchpad pool factory) — deployed by RedeployAll script
-export const AGENT_POOL_FACTORY_ADDRESS: Address = "0xF6CA25ebA2Dc010d19507D2C6138ba2598B7b974";
+export const AGENT_POOL_FACTORY_ADDRESS: Address = "0x2Cd3c8D045b29B1baC914722D85419964DBD79B7";
 
 export const AGENT_POOL_FACTORY_ABI = [
   {

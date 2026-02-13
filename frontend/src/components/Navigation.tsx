@@ -12,6 +12,7 @@ const navLinks = [
   { href: "/playground", label: "Playground" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/register", label: "Register" },
+  { href: "/simulation", label: "Simulation" },
   { href: "/score", label: "Score" },
 ];
 
@@ -20,20 +21,35 @@ export function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <nav className="sticky top-0 z-50 bg-black/50 backdrop-blur-lg border-b border-white/10">
+    <nav className="sticky top-0 z-[120] bg-black/95 border-b border-white/10">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          {/* Logo */}
-          <Link
-            href="/"
-            className="flex items-center space-x-2 text-2xl font-display font-bold text-white hover:text-pragma-primary transition-colors duration-200"
-          >
-            <span className="material-icons text-3xl">account_balance_wallet</span>
-            <span>PragmaMoney</span>
-          </Link>
+          <div className="flex items-center gap-3">
+            {/* Mobile Menu Button */}
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="xl:hidden p-2 rounded-lg hover:bg-lobster-hover transition-colors duration-200"
+              aria-label="Toggle menu"
+            >
+              {mobileMenuOpen ? (
+                <X className="w-6 h-6 text-white" />
+              ) : (
+                <Menu className="w-6 h-6 text-white" />
+              )}
+            </button>
+
+            {/* Logo */}
+            <Link
+              href="/"
+              className="flex items-center space-x-2 text-2xl font-display font-bold text-white hover:text-pragma-primary transition-colors duration-200"
+            >
+              <span className="material-icons text-3xl">account_balance_wallet</span>
+              <span>PragmaMoney</span>
+            </Link>
+          </div>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center space-x-1">
+          <div className="hidden xl:flex items-center space-x-1">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
@@ -50,30 +66,43 @@ export function Navigation() {
             ))}
           </div>
 
-          {/* Desktop Connect Wallet */}
-          <div className="hidden md:block">
+          {/* Connect Wallet (always visible, right) */}
+          <div className="flex items-center">
             <ConnectWallet />
           </div>
-
-          {/* Mobile Menu Button */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 rounded-lg hover:bg-lobster-hover transition-colors duration-200"
-            aria-label="Toggle menu"
-          >
-            {mobileMenuOpen ? (
-              <X className="w-6 h-6 text-white" />
-            ) : (
-              <Menu className="w-6 h-6 text-white" />
-            )}
-          </button>
         </div>
       </div>
 
-      {/* Mobile Menu */}
-      {mobileMenuOpen && (
-        <div className="md:hidden border-t border-white/10 bg-black/90 backdrop-blur-xl">
-          <div className="px-4 py-4 space-y-2">
+      {/* Slide-in Mobile Menu */}
+      <div
+        className={cn(
+          "xl:hidden fixed left-0 right-0 bottom-0 top-16 z-[110] transition-opacity duration-200",
+          mobileMenuOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        )}
+        aria-hidden={!mobileMenuOpen}
+      >
+        <button
+          className="absolute inset-0 bg-black/75"
+          aria-label="Close menu"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+        <div
+          className={cn(
+            "absolute left-0 top-0 h-full w-72 max-w-[85vw] border-r border-white/10 bg-black/95 backdrop-blur-xl p-5 transition-transform duration-200 shadow-2xl",
+            mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+          )}
+        >
+          <div className="flex items-center justify-between mb-6">
+            <span className="text-sm uppercase tracking-widest text-white/60">Navigation</span>
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+              aria-label="Close menu"
+            >
+              <X className="w-5 h-5 text-white" />
+            </button>
+          </div>
+          <div className="space-y-2">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
@@ -89,12 +118,9 @@ export function Navigation() {
                 {link.label}
               </Link>
             ))}
-            <div className="pt-4 border-t border-white/10">
-              <ConnectWallet />
-            </div>
           </div>
         </div>
-      )}
+      </div>
     </nav>
   );
 }

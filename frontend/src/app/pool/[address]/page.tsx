@@ -22,6 +22,18 @@ import {
 import Link from "next/link";
 import Image from "next/image";
 
+function getUserFriendlyError(err: unknown) {
+  const anyErr = err as { code?: number; name?: string; shortMessage?: string; message?: string };
+  const msg = `${anyErr?.shortMessage || ""} ${anyErr?.message || ""}`.toLowerCase();
+  if (anyErr?.code === 4001 || anyErr?.name === "UserRejectedRequestError") {
+    return "Transaction cancelled";
+  }
+  if (msg.includes("user rejected") || msg.includes("rejected the request")) {
+    return "Transaction cancelled";
+  }
+  return anyErr?.shortMessage || anyErr?.message || "Unknown error";
+}
+
 export default function PoolPage({ params }: { params: { address: string } }) {
   const poolAddress = params.address as Address;
   const { address: userAddress, isConnected } = useAccount();
@@ -37,25 +49,34 @@ export default function PoolPage({ params }: { params: { address: string } }) {
 
   const handleApprove = async () => {
     if (!depositAmount || !userAddress || !publicClient) return;
+    let txHash: `0x${string}` | undefined;
     try {
       setApproveTx({ status: "pending" });
-      const hash = await writeContractAsync({
+      txHash = await writeContractAsync({
         address: USDC_ADDRESS,
         abi: ERC20_ABI,
         functionName: "approve",
         args: [poolAddress, parseUSDC(depositAmount)],
       });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 30_000,
+      });
       if (receipt.status === "success") {
-        setApproveTx({ status: "success", hash });
-      } else {
-        setApproveTx({ status: "error", error: "Transaction failed" });
+        setApproveTx({ status: "success", hash: txHash });
+        return;
       }
+      setApproveTx({ status: "error", error: "Transaction failed" });
     } catch (err) {
       console.error("Approve error:", err);
+      if (txHash && err instanceof Error && err.name === "WaitForTransactionReceiptTimeoutError") {
+        // Timeout: fall back to optimistic success so the UI doesn't hang.
+        setApproveTx({ status: "success", hash: txHash });
+        return;
+      }
       setApproveTx({
         status: "error",
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: getUserFriendlyError(err),
       });
     }
   };
@@ -83,7 +104,7 @@ export default function PoolPage({ params }: { params: { address: string } }) {
       console.error("Deposit error:", err);
       setDepositTx({
         status: "error",
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: getUserFriendlyError(err),
       });
     }
   };
@@ -110,7 +131,7 @@ export default function PoolPage({ params }: { params: { address: string } }) {
       console.error("Withdraw error:", err);
       setWithdrawTx({
         status: "error",
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: getUserFriendlyError(err),
       });
     }
   };
@@ -183,7 +204,8 @@ export default function PoolPage({ params }: { params: { address: string } }) {
       : 0;
 
   const formatShares = (val: bigint) => {
-    const s = formatUnits(val, 18);
+    // ERC-4626 shares use the same decimals as the asset (USDC = 6)
+    const s = formatUnits(val, 6);
     const dot = s.indexOf(".");
     return dot >= 0 ? s.substring(0, dot + 3) : s;
   };

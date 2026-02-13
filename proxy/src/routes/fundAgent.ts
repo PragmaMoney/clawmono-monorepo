@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { JsonRpcProvider, Wallet, Contract, ethers } from "ethers";
 import { config } from "../config.js";
-import { initDeployerNonce, allocateNonce } from "../services/nonceManager.js";
+import { syncDeployerNonce, allocateNonce } from "../services/nonceManager.js";
 
 // ---------------------------------------------------------------------------
 // ABIs
@@ -79,7 +79,7 @@ fundAgentRouter.post("/", async (req: Request, res: Response) => {
     }
 
     // ---- Send ETH ----
-    await initDeployerNonce(provider, await deployer.getAddress());
+    await syncDeployerNonce(provider, await deployer.getAddress());
 
     const amount = ethers.parseEther(config.fundAmountEoa);
     const nonce = allocateNonce();

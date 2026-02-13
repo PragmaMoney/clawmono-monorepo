@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { JsonRpcProvider, Wallet, Contract, ethers } from "ethers";
 import { config } from "../config.js";
-import { initDeployerNonce, allocateNonce } from "../services/nonceManager.js";
+import { syncDeployerNonce, allocateNonce } from "../services/nonceManager.js";
 
 // ---------------------------------------------------------------------------
 // ABIs (human-readable)
@@ -117,7 +117,7 @@ allowTargetRouter.post("/", async (req: Request, res: Response) => {
     }
 
     // ---- Call setTargetAllowed on the smart account ----
-    await initDeployerNonce(provider, deployerAddress);
+    await syncDeployerNonce(provider, deployerAddress);
     const nonce = allocateNonce();
 
     console.log(`[allow-target] setTargetAllowed(${targetAddress}, true) on ${smartAccountAddress} (nonce=${nonce})`);
