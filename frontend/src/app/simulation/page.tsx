@@ -120,10 +120,7 @@ export default function SimulationPage() {
   }, []);
 
   const ensureKey = () => {
-    if (!apiKey.trim()) {
-      showToast("API key required to call simulation steps.");
-      return false;
-    }
+    if (!apiKey.trim()) return false;
     if (!simProxyUrl) {
       showToast("Proxy URL Not Set.");
       return false;
@@ -207,8 +204,82 @@ export default function SimulationPage() {
     setLogs(parsed.slice(0, 12));
   };
 
+  const runDemoStep = (step: string) => {
+    const stamp = nowLabel();
+    const push = (text: string) => addLog(text);
+    if (step === "init") {
+      setAgentAEoa("0x35ac16EdD84Ec0C1397C41c260BC288593E90B6C");
+      setAgentBEoa("0x367CF2175C3Db73Fb4496578773eEE991590b0d3");
+      setAgentAReady(true);
+      setAgentBReady(true);
+      push(`Demo: Initialized new EOAs.`);
+      push(`Demo: Agent A EOA created.`);
+      push(`Demo: Agent B EOA created.`);
+      return;
+    }
+    if (step === "register") {
+      setAgentAId("172");
+      setAgentBId("173");
+      setAgentASmartAccount("0x53e7A5d01325d9c2A48FE026D9eEb612c5e80722");
+      setAgentBSmartAccount("0xDB3D454B56933ce0ce350A0B01B9E7B3e2805825");
+      setAgentAPool("0x9b3a7b531Ee1cDB115D5cd5f5d00a4F9D6fFB0Cb");
+      setAgentBPool("0xa5cde960079168A48Cbe2d61A630A370A5393C10");
+      setAgentASmartVisible(true);
+      setAgentBSmartVisible(true);
+      setAgentAPoolVisible(true);
+      setAgentBPoolVisible(true);
+      push(`Demo: Agent A registered (agentId 172).`);
+      push(`Demo: Agent B registered (agentId 173).`);
+      return;
+    }
+    if (step === "seed") {
+      setAgentASmartUsdc("0.5");
+      setAgentBSmartUsdc("0.5");
+      setAgentATvl("0.5");
+      setAgentBTvl("1.0");
+      push(`Demo: Pools seeded and balances updated.`);
+      return;
+    }
+    if (step === "register-service") {
+      setServicesRegistered(true);
+      push(`Demo: Service registered by Agent B.`);
+      return;
+    }
+    if (step === "pay") {
+      push(`Demo: Agent A paid for service via x402 gateway.`);
+      return;
+    }
+    if (step === "reset") {
+      setAgentAEoa(null);
+      setAgentBEoa(null);
+      setAgentAId(null);
+      setAgentBId(null);
+      setAgentASmartAccount(null);
+      setAgentBSmartAccount(null);
+      setAgentAPool(null);
+      setAgentBPool(null);
+      setAgentASmartVisible(false);
+      setAgentBSmartVisible(false);
+      setAgentAPoolVisible(false);
+      setAgentBPoolVisible(false);
+      setServicesRegistered(false);
+      setAgentASmartUsdc("0.00");
+      setAgentBSmartUsdc("0.00");
+      setAgentATvl("0.00");
+      setAgentBTvl("0.00");
+      setLogs([{ ts: stamp, text: "Demo: Simulation reset." }]);
+      return;
+    }
+  };
+
   const callSimStep = async (step: string) => {
-    if (!ensureKey() || isActionRunning) return;
+    if (isActionRunning) return;
+    if (!ensureKey()) {
+      showToast("No API key provided. Running demo mode.");
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      runDemoStep(step);
+      return;
+    }
     console.log(`[simulation] calling step "${step}"`);
     addLog(`Simulation: running step "${step}"...`);
     try {
@@ -632,7 +703,7 @@ export default function SimulationPage() {
                   <div>
                     <h2 className="font-display text-2xl font-semibold">Agent Grid</h2>
                     <p className="text-white/60 text-sm">
-                      Hardcoded demo: Agent A, Agent B, x402 Gateway.
+                      Live flow: Agent A, Agent B, x402 Gateway.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
