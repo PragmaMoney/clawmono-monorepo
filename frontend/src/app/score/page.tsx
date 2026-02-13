@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import type { Address } from "viem";
 import { SCORE_ORACLE_ADDRESS } from "@/lib/contracts";
+import { useAgentRegistry } from "@/hooks/useAgentRegistry";
 
 const SCORE_ORACLE_ABI = [
   {
@@ -26,11 +27,9 @@ const INT32_MAX = 2_147_483_647;
 export default function ScorePage() {
   const { address, isConnected } = useAccount();
   const { writeContractAsync } = useWriteContract();
+  const { agents, isLoading: loadingAgents } = useAgentRegistry();
 
   const [agentId, setAgentId] = useState("");
-  const [tag1s, setTag1s] = useState("");
-  const [tag2s, setTag2s] = useState("");
-  const [weights, setWeights] = useState("");
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,23 +37,30 @@ export default function ScorePage() {
     hash: txHash ?? undefined,
   });
 
-  const parsed = useMemo(() => {
-    const tag1List = tag1s
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const tag2List = tag2s
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const weightList = weights
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .map((item) => Number(item));
+  const agentOptions = useMemo(
+    () =>
+      agents
+        .slice()
+        .sort((a, b) => Number(b.agentId - a.agentId))
+        .map((agent) => ({
+          id: agent.agentId.toString(),
+          label: `${agent.name || `Agent #${agent.agentId.toString()}`} (id ${agent.agentId.toString()})`,
+        })),
+    [agents]
+  );
 
+  useEffect(() => {
+    if (!agentId && agentOptions.length) {
+      setAgentId(agentOptions[0].id);
+    }
+  }, [agentId, agentOptions]);
+
+  const parsed = useMemo(() => {
+    const tag1List = ["score"];
+    const tag2List = ["payment"];
+    const weightList = [10000];
     return { tag1List, tag2List, weightList };
-  }, [tag1s, tag2s, weights]);
+  }, []);
 
   const handleSubmit = async () => {
     setError(null);
@@ -69,31 +75,12 @@ export default function ScorePage() {
     }
 
     const { tag1List, tag2List, weightList } = parsed;
-    if (tag1List.length === 0) {
-      setError("Provide at least one tag pair.");
-      return;
-    }
-    if (tag2List.length > 0 && tag2List.length > tag1List.length) {
-      setError("tag2s cannot be longer than tag1s.");
-      return;
-    }
-    if (tag1List.length !== weightList.length) {
-      setError("tag1s and weights must have the same length.");
-      return;
-    }
-    if (weightList.some((value) => Number.isNaN(value))) {
-      setError("Weights must be valid numbers.");
-      return;
-    }
     if (weightList.some((value) => value < INT32_MIN || value > INT32_MAX)) {
       setError("Weights must fit within int32 range.");
       return;
     }
 
-    const resolvedTag2s =
-      tag2List.length === 0
-        ? tag1List.map(() => "")
-        : [...tag2List, ...new Array(tag1List.length - tag2List.length).fill("")];
+    const resolvedTag2s = tag2List;
 
     try {
       const hash = await writeContractAsync({
@@ -127,51 +114,34 @@ export default function ScorePage() {
               <label className="block text-sm font-semibold text-lobster-dark mb-2">
                 Agent ID
               </label>
-              <input
+              <select
                 value={agentId}
                 onChange={(event) => setAgentId(event.target.value)}
-                placeholder="e.g. 1"
-                className="w-full px-4 py-3 rounded-xl border border-lobster-border focus:outline-none focus:ring-2 focus:ring-lobster-primary/30"
-              />
+                className="w-full px-4 py-3 rounded-xl border border-lobster-border bg-white focus:outline-none focus:ring-2 focus:ring-lobster-primary/30"
+              >
+                <option value="" disabled>
+                  {loadingAgents ? "Loading agents..." : "Select an agent"}
+                </option>
+                {agentOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {!loadingAgents && agentOptions.length === 0 && (
+                <p className="text-xs text-lobster-text mt-2">
+                  No registered agents found on-chain yet.
+                </p>
+              )}
             </div>
 
-            <div>
-              <label className="block text-sm font-semibold text-lobster-dark mb-2">
-                tag1s (comma-separated)
-              </label>
-              <input
-                value={tag1s}
-                onChange={(event) => setTag1s(event.target.value)}
-                placeholder="performance, latency"
-                className="w-full px-4 py-3 rounded-xl border border-lobster-border focus:outline-none focus:ring-2 focus:ring-lobster-primary/30"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-lobster-dark mb-2">
-                tag2s (comma-separated, optional)
-              </label>
-              <input
-                value={tag2s}
-                onChange={(event) => setTag2s(event.target.value)}
-                placeholder="uptime, response"
-                className="w-full px-4 py-3 rounded-xl border border-lobster-border focus:outline-none focus:ring-2 focus:ring-lobster-primary/30"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-lobster-dark mb-2">
-                weightsBps (comma-separated, signed)
-              </label>
-              <input
-                value={weights}
-                onChange={(event) => setWeights(event.target.value)}
-                placeholder="10000, -5000"
-                className="w-full px-4 py-3 rounded-xl border border-lobster-border focus:outline-none focus:ring-2 focus:ring-lobster-primary/30"
-              />
-              <p className="text-xs text-lobster-text mt-2">
-                Use basis points (10,000 = 1.0x). Negative values mean lower is better.
-              </p>
+            <div className="rounded-xl border border-lobster-border bg-lobster-muted/40 px-4 py-3 text-sm text-lobster-text">
+              Tags and weights are prefilled behind the scenes:
+              <div className="mt-2 text-xs text-lobster-dark">
+                tag1: <span className="font-semibold">score</span> · tag2:{" "}
+                <span className="font-semibold">payment</span> · weight:{" "}
+                <span className="font-semibold">10000</span> bps
+              </div>
             </div>
           </div>
 

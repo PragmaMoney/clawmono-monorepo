@@ -54,6 +54,7 @@ export default function SimulationPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const viewRef = useRef<HTMLDivElement | null>(null);
+  const liveLogRef = useRef<HTMLDivElement | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const toastHideTimerRef = useRef<number | null>(null);
@@ -85,12 +86,29 @@ export default function SimulationPage() {
     setHydrated(true);
   }, []);
 
+  useEffect(() => {
+    if (!liveLogRef.current) return;
+    liveLogRef.current.scrollTop = liveLogRef.current.scrollHeight;
+  }, [logs]);
+
   const nowLabel = () => new Date().toLocaleTimeString();
   const nowIso = () => new Date().toISOString();
 
   const addLog = (text: string) => {
-    const ts = hydrated ? nowLabel() : "--:--:--";
-    setLogs((prev) => [{ ts, text }, ...prev].slice(0, 12));
+    const ts = hydrated ? nowIso() : "--:--:--";
+    setLogs((prev) => {
+      const merged = [...prev, { ts, text }];
+      const deduped: LogEntry[] = [];
+      const seen = new Set<string>();
+      for (const item of merged) {
+        const key = `${item.ts}|${item.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+      }
+      deduped.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+      return deduped.slice(-200);
+    });
   };
 
   const simProxyUrl = (process.env.NEXT_PUBLIC_PROXY_URL || "").replace(/\/$/, "");
@@ -186,7 +204,19 @@ export default function SimulationPage() {
         .slice()
         .reverse()
         .map((entry) => ({ ts: entry.ts, text: entry.text }));
-      setLogs(mapped.slice(0, 12));
+      setLogs((prev) => {
+        const merged = [...prev, ...mapped];
+        const deduped: LogEntry[] = [];
+        const seen = new Set<string>();
+        for (const item of merged) {
+          const key = `${item.ts}|${item.text}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          deduped.push(item);
+        }
+        deduped.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+        return deduped.slice(-200);
+      });
     }
   };
 
@@ -201,11 +231,23 @@ export default function SimulationPage() {
         return { ts: nowIso(), text: line };
       })
       .reverse();
-    setLogs(parsed.slice(0, 12));
+    setLogs((prev) => {
+      const merged = [...prev, ...parsed];
+      const deduped: LogEntry[] = [];
+      const seen = new Set<string>();
+      for (const item of merged) {
+        const key = `${item.ts}|${item.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+      }
+      deduped.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+      return deduped.slice(-200);
+    });
   };
 
   const runDemoStep = (step: string) => {
-    const stamp = nowLabel();
+    const stamp = nowIso();
     const push = (text: string) => addLog(text);
     if (step === "init") {
       setAgentAEoa("0x35ac16EdD84Ec0C1397C41c260BC288593E90B6C");
@@ -670,7 +712,7 @@ export default function SimulationPage() {
       {toastMessage && (
         <div
           className={cn(
-            "toast-shell fixed bottom-6 right-6 z-50 w-[min(360px,90vw)] rounded-xl border border-lobster-primary/60 bg-lobster-primary px-4 py-3 text-sm text-white shadow-lg",
+            "toast-shell fixed bottom-6 left-6 z-50 w-[min(360px,90vw)] rounded-xl border border-lobster-primary/60 bg-lobster-primary px-4 py-3 text-sm text-white shadow-lg",
             toastVisible ? "toast-visible" : ""
           )}
         >
@@ -1554,7 +1596,10 @@ export default function SimulationPage() {
 
             <div className="rounded-2xl border border-white/10 bg-black/50 p-5">
               <h3 className="font-display text-xl mb-3">Live Log</h3>
-              <div className="sim-scrollbar rounded-xl border border-emerald-400/20 bg-black/90 max-h-[320px] overflow-auto p-3 font-mono text-xs leading-5">
+              <div
+                ref={liveLogRef}
+                className="sim-scrollbar rounded-xl border border-emerald-400/20 bg-black/90 max-h-[320px] overflow-auto p-3 font-mono text-xs leading-5"
+              >
                 {logs.length === 0 && (
                   <div className="text-emerald-300/70">
                     &gt; waiting for activity...

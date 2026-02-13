@@ -35,6 +35,196 @@ export interface PayInput {
   score?: number;
 }
 
+type PayWalletData = {
+  privateKey: string;
+  address: string;
+};
+
+type PayRegistration = {
+  smartAccount: string;
+};
+
+export async function handlePayWith(
+  input: PayInput,
+  walletData: PayWalletData,
+  registration: PayRegistration
+): Promise<string> {
+  try {
+    if (input.action !== "pay") {
+      return JSON.stringify({
+        error: "handlePayWith only supports action=pay.",
+      });
+    }
+
+    if (!input.serviceId) {
+      return JSON.stringify({
+        error: "serviceId is required for 'pay' action.",
+      });
+    }
+
+    if (input.score === undefined || input.score === null) {
+      return JSON.stringify({
+        error: "score is required for 'pay' action.",
+      });
+    }
+
+    const calls = input.calls ?? 1;
+    if (calls <= 0) {
+      return JSON.stringify({ error: "calls must be a positive integer." });
+    }
+
+    const rpcUrl = input.rpcUrl ?? RPC_URL;
+    const provider = new JsonRpcProvider(rpcUrl);
+    const registry = new Contract(SERVICE_REGISTRY_ADDRESS, SERVICE_REGISTRY_ABI, provider);
+    const service = await registry.getService(input.serviceId);
+    const agentId: bigint = await registry.getAgentId(input.serviceId);
+
+    if (!service.active) {
+      return JSON.stringify({
+        error: `Service ${input.serviceId} is not active.`,
+      });
+    }
+
+    const pricePerCall: bigint = service.pricePerCall;
+    const totalCost = pricePerCall * BigInt(calls);
+
+    const usdc = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
+    const balance: bigint = await usdc.balanceOf(registration.smartAccount);
+
+    if (balance < totalCost) {
+      return JSON.stringify({
+        error: `Insufficient USDC balance. Need ${formatUnits(totalCost, USDC_DECIMALS)} USDC but smart account has ${formatUnits(balance, USDC_DECIMALS)} USDC.`,
+        required: formatUnits(totalCost, USDC_DECIMALS),
+        available: formatUnits(balance, USDC_DECIMALS),
+        smartAccount: registration.smartAccount,
+      });
+    }
+
+    await sendUserOp(
+      registration.smartAccount as `0x${string}`,
+      walletData.privateKey as `0x${string}`,
+      [
+        buildApproveCall(
+          USDC_ADDRESS as `0x${string}`,
+          X402_GATEWAY_ADDRESS as `0x${string}`,
+          totalCost
+        ),
+      ],
+      { skipSponsorship: true }
+    );
+
+    const result = await sendUserOp(
+      registration.smartAccount as `0x${string}`,
+      walletData.privateKey as `0x${string}`,
+      [
+        buildPayForServiceCall(
+          input.serviceId as `0x${string}`,
+          BigInt(calls)
+        ),
+      ],
+      { skipSponsorship: true }
+    );
+
+    if (!result.success) {
+      return JSON.stringify({
+        error: "UserOp failed on-chain.",
+        txHash: result.txHash,
+        userOpHash: result.userOpHash,
+      });
+    }
+
+    let reputationTx: string | null = null;
+    const scoreNum = Number(input.score);
+    if (Number.isNaN(scoreNum) || scoreNum < 0 || scoreNum > 100) {
+      return JSON.stringify({ error: "score must be between 0 and 100" });
+    }
+    if (!REPUTATION_REPORTER_ADDRESS) {
+      return JSON.stringify({ error: "REPUTATION_REPORTER_ADDRESS is not configured" });
+    }
+
+    const tag1 = "score";
+    const tag2 = "payment";
+    const endpoint = "";
+    const feedbackURI = "";
+    const payload = JSON.stringify({
+      serviceId: input.serviceId,
+      agentId: agentId.toString(),
+      score: scoreNum,
+      tag1,
+      tag2,
+    });
+    const feedbackHash = keccak256(stringToHex(payload));
+
+    const repResult = await sendUserOp(
+      registration.smartAccount as `0x${string}`,
+      walletData.privateKey as `0x${string}`,
+      [
+        buildReputationFeedbackCall(
+          REPUTATION_REPORTER_ADDRESS as `0x${string}`,
+          agentId,
+          BigInt(scoreNum),
+          0,
+          tag1,
+          tag2,
+          endpoint,
+          feedbackURI,
+          feedbackHash as `0x${string}`
+        ),
+      ],
+      { skipSponsorship: true }
+    );
+
+    if (!repResult.success) {
+      return JSON.stringify({
+        error: "Reputation UserOp failed on-chain.",
+        txHash: repResult.txHash,
+        userOpHash: repResult.userOpHash,
+      });
+    }
+    reputationTx = repResult.txHash;
+
+    let paymentId: string | null = null;
+    const txReceipt = await provider.getTransactionReceipt(result.txHash);
+    if (txReceipt) {
+      const gateway = new Contract(X402_GATEWAY_ADDRESS, X402_GATEWAY_ABI, provider);
+      for (const log of txReceipt.logs) {
+        try {
+          const parsed = gateway.interface.parseLog({
+            topics: log.topics as string[],
+            data: log.data,
+          });
+          if (parsed && parsed.name === "ServicePaid") {
+            paymentId = parsed.args.paymentId;
+            break;
+          }
+        } catch {
+          // Not a gateway event, skip
+        }
+      }
+    }
+
+    return JSON.stringify({
+      success: true,
+      action: "pay",
+      serviceId: input.serviceId,
+      serviceName: service.name as string,
+      calls,
+      totalCost: formatUnits(totalCost, USDC_DECIMALS),
+      totalCostRaw: totalCost.toString(),
+      paymentId: paymentId ?? "query-from-tx",
+      txHash: result.txHash,
+      userOpHash: result.userOpHash,
+      payer: registration.smartAccount,
+      agentId: agentId.toString(),
+      reputationTx,
+      score: scoreNum,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return JSON.stringify({ error: message });
+  }
+}
+
 export async function handlePay(input: PayInput): Promise<string> {
   try {
     const rpcUrl = input.rpcUrl ?? RPC_URL;

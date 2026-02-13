@@ -43,11 +43,10 @@ import {
   sendUserOp,
   buildPoolPullCall,
   buildRegisterServiceCall,
-  buildApproveCall,
-  buildPayForServiceCall,
 } from "../src/userop.js";
 import { keccak256, stringToHex } from "viem";
 import { Interface } from "ethers";
+import { handlePayWith } from "../src/pay.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -676,28 +675,45 @@ async function stepRegisterService(state: FlowState) {
 async function stepPay(state: FlowState, provider: JsonRpcProvider) {
   assert(state.regA && state.walletA && state.service, "Run register-service step first");
 
-  const priceWei = BigInt(state.service.priceWei);
-  const payResult = await sendUserOp(
-    state.regA.smartAccount as `0x${string}`,
-    state.walletA.privateKey as `0x${string}`,
-    [
-      buildApproveCall(USDC_ADDRESS as `0x${string}`, X402_GATEWAY_ADDRESS as `0x${string}`, priceWei),
-      buildPayForServiceCall(state.service.idHex as `0x${string}`, 1n),
-    ],
+  const payJson = await handlePayWith(
+    {
+      action: "pay",
+      serviceId: state.service.idHex,
+      calls: 1,
+      score: 90,
+      rpcUrl: RPC_URL,
+    },
+    { privateKey: state.walletA.privateKey, address: state.walletA.address },
+    { smartAccount: state.regA.smartAccount }
   );
+  const payResult = JSON.parse(payJson) as {
+    success?: boolean;
+    error?: string;
+    txHash?: string;
+    reputationTx?: string | null;
+    paymentId?: string;
+    userOpHash?: string;
+    totalCost?: string;
+    score?: number;
+  };
 
-  if (!payResult.success) {
-    throw new Error("Payment failed");
+  if (!payResult.success || !payResult.txHash) {
+    throw new Error(payResult.error || "Payment failed");
   }
 
   state.txHashes = {
     ...(state.txHashes ?? {}),
     pay: payResult.txHash,
+    ...(payResult.reputationTx ? { reputation: payResult.reputationTx } : {}),
   };
   addLog(state, `Agent A paid for service ${state.service.name} via x402 gateway.`);
   addLog(state, `Payer smart account: ${state.regA.smartAccount}.`);
   addLog(state, `Gateway: ${X402_GATEWAY_ADDRESS}.`);
   addLog(state, `Pay tx: ${payResult.txHash}.`);
+  if (payResult.reputationTx) addLog(state, `Reputation tx: ${payResult.reputationTx}.`);
+  if (payResult.paymentId) addLog(state, `Payment ID: ${payResult.paymentId}.`);
+  if (payResult.totalCost) addLog(state, `Total cost: ${payResult.totalCost} USDC.`);
+  if (typeof payResult.score === "number") addLog(state, `Score submitted: ${payResult.score}.`);
 
   const registry = new Contract(SERVICE_REGISTRY_ADDRESS, SERVICE_REGISTRY_ABI, provider);
   const svc = await registry.getService(state.service.idHex);
