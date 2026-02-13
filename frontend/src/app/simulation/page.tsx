@@ -685,12 +685,6 @@ export default function SimulationPage() {
               Visualize agents, smart accounts, pools, and gateway flow in real time.
             </p>
           </div>
-          <Link
-            href="/dashboard"
-            className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
-          >
-            Back to Dashboard
-          </Link>
         </div>
 
         <div className="grid lg:grid-cols-3 gap-6">
