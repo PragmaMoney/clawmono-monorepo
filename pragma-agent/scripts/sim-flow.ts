@@ -61,6 +61,7 @@ const STEP_VALUES = new Set([
   "pay",
   "all",
   "reset",
+  "orchestrate-deal",
 ]);
 
 type WalletRecord = {
@@ -112,6 +113,12 @@ type FlowState = {
     agentBSmartUsdc?: string;
     poolAUsdc?: string;
     poolBUsdc?: string;
+  };
+  orchestration?: {
+    catFact?: string;
+    imageUrl?: string;
+    catfactTx?: string;
+    imageGenTx?: string;
   };
 };
 
@@ -687,6 +694,273 @@ async function stepRegisterService(state: FlowState) {
   addLog(state, `Register service tx: ${result.txHash}.`);
 }
 
+// ─── x402 Facilitator Constants ─────────────────────────────────────────────
+const MONAD_NETWORK = "eip155:10143" as const;
+const CHAIN_ID = 10143;
+
+// EIP-712 domain for Monad USDC TransferWithAuthorization
+const USDC_DOMAIN = {
+  name: "USDC",
+  version: "2",
+  chainId: BigInt(CHAIN_ID),
+  verifyingContract: USDC_ADDRESS as `0x${string}`,
+} as const;
+
+// EIP-712 types for TransferWithAuthorization (ERC-3009)
+const TRANSFER_WITH_AUTHORIZATION_TYPES = {
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+interface X402PaymentRequired {
+  x402Version: number;
+  accepts: Array<{
+    scheme: string;
+    network: string;
+    amount: string;
+    payTo: string;
+    maxTimeoutSeconds: number;
+    asset: string;
+    extra?: { name: string; version: string };
+  }>;
+  resource: {
+    url: string;
+    description: string;
+    mimeType: string;
+  };
+}
+
+/**
+ * Call a NATIVE_X402 service using the facilitator flow.
+ * Signs a TransferWithAuthorization and sends with PAYMENT-SIGNATURE header.
+ */
+async function callNativeX402Service(
+  endpoint: string,
+  body: object,
+  privateKey: string,
+): Promise<{ success: boolean; response?: string; error?: string; txHash?: string }> {
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { keccak256: viemKeccak256, toHex } = await import("viem");
+
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+
+  // Step 1: Make initial request to get 402 with payment requirements
+  const initialResponse = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  // If not 402, the endpoint is free or already authenticated
+  if (initialResponse.status !== 402) {
+    const responseBody = await initialResponse.text();
+    return {
+      success: initialResponse.status === 200,
+      response: responseBody,
+      error: initialResponse.status !== 200 ? `HTTP ${initialResponse.status}` : undefined,
+    };
+  }
+
+  // Step 2: Parse payment requirements from 402 response
+  const paymentRequiredHeader = initialResponse.headers.get("PAYMENT-REQUIRED");
+  if (!paymentRequiredHeader) {
+    return { success: false, error: "402 response missing PAYMENT-REQUIRED header" };
+  }
+
+  let paymentRequired: X402PaymentRequired;
+  try {
+    const decoded = Buffer.from(paymentRequiredHeader, "base64").toString("utf-8");
+    paymentRequired = JSON.parse(decoded);
+  } catch {
+    try {
+      paymentRequired = JSON.parse(paymentRequiredHeader);
+    } catch {
+      return { success: false, error: "Failed to parse PAYMENT-REQUIRED header" };
+    }
+  }
+
+  if (!paymentRequired.accepts || paymentRequired.accepts.length === 0) {
+    return { success: false, error: "No payment options in PAYMENT-REQUIRED" };
+  }
+
+  const accepted = paymentRequired.accepts[0];
+
+  // Step 3: Build TransferWithAuthorization message
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = viemKeccak256(toHex(Math.random().toString())) as `0x${string}`;
+
+  const authorization = {
+    from: account.address,
+    to: accepted.payTo as `0x${string}`,
+    value: BigInt(accepted.amount),
+    validAfter: BigInt(now - 60),
+    validBefore: BigInt(now + 900),
+    nonce,
+  };
+
+  // Step 4: Sign EIP-712 TransferWithAuthorization
+  const signature = await account.signTypedData({
+    domain: USDC_DOMAIN,
+    types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+    primaryType: "TransferWithAuthorization",
+    message: authorization,
+  });
+
+  // Step 5: Build x402 v2 payload
+  const x402Payload = {
+    x402Version: 2,
+    payload: {
+      authorization: {
+        from: authorization.from,
+        to: authorization.to,
+        value: authorization.value.toString(),
+        validAfter: authorization.validAfter.toString(),
+        validBefore: authorization.validBefore.toString(),
+        nonce: authorization.nonce,
+      },
+      signature,
+    },
+    resource: paymentRequired.resource,
+    accepted: accepted,
+  };
+
+  // Step 6: Send request with PAYMENT-SIGNATURE header
+  const paymentSignature = Buffer.from(JSON.stringify(x402Payload)).toString("base64");
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "PAYMENT-SIGNATURE": paymentSignature,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const responseBody = await response.text();
+
+  // Check for payment response header
+  const paymentResponseHeader = response.headers.get("PAYMENT-RESPONSE");
+  let txHash: string | undefined;
+  if (paymentResponseHeader) {
+    try {
+      const decoded = Buffer.from(paymentResponseHeader, "base64").toString("utf-8");
+      const paymentResponse = JSON.parse(decoded);
+      txHash = paymentResponse.transaction;
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  return {
+    success: response.status === 200,
+    response: responseBody,
+    error: response.status !== 200 ? `HTTP ${response.status}` : undefined,
+    txHash,
+  };
+}
+
+/**
+ * Orchestrate a multi-service deal: Cat fact → Image generation
+ */
+async function stepOrchestrateDeal(state: FlowState, provider: JsonRpcProvider) {
+  assert(state.regA && state.walletA, "Run register step first");
+
+  const usdc = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
+  const balanceBefore: bigint = await usdc.balanceOf(state.regA.smartAccount);
+  addLog(state, `--- ORCHESTRATE DEAL: Agent A Starting ---`);
+  addLog(state, `Agent A smart account: ${state.regA.smartAccount}`);
+  addLog(state, `Agent A USDC balance: ${formatUnits(balanceBefore, USDC_DECIMALS)} USDC`);
+
+  // Step 1: Fetch a cat fact from catfact.ninja (free API)
+  addLog(state, `Step 1: Fetching cat fact from catfact.ninja...`);
+  let catFact: string;
+  try {
+    const catfactResponse = await fetch("https://catfact.ninja/fact");
+    const catfactJson = await catfactResponse.json() as { fact: string; length: number };
+    catFact = catfactJson.fact;
+    addLog(state, `Cat fact received: "${catFact.slice(0, 60)}..."`);
+  } catch (err) {
+    throw new Error(`Failed to fetch cat fact: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  state.orchestration = {
+    catFact,
+  };
+
+  // Step 2: Generate an image using the cat fact as prompt
+  addLog(state, `Step 2: Generating image from cat fact...`);
+  const imageGenEndpoint = process.env.IMAGE_GEN_ENDPOINT || "http://62.84.190.147:3099/image-generator/tools/generate_image";
+  const imagePrompt = `A cute cartoon cat illustrating: ${catFact.slice(0, 100)}`;
+
+  addLog(state, `Image prompt: "${imagePrompt.slice(0, 60)}..."`);
+  addLog(state, `Calling image generator at: ${imageGenEndpoint}`);
+
+  const imageResult = await callNativeX402Service(
+    imageGenEndpoint,
+    {
+      prompt: imagePrompt,
+      size: "1024x1024",
+      style: "cartoon",
+    },
+    state.walletA.privateKey,
+  );
+
+  if (!imageResult.success) {
+    addLog(state, `Image generation failed: ${imageResult.error}`);
+    throw new Error(`Image generation failed: ${imageResult.error}`);
+  }
+
+  // Parse image response
+  let imageUrl: string | undefined;
+  try {
+    const imageJson = JSON.parse(imageResult.response ?? "{}") as {
+      success?: boolean;
+      image_url?: string;
+      prompt_used?: string;
+    };
+    imageUrl = imageJson.image_url;
+    addLog(state, `Image generated successfully!`);
+    if (imageUrl) {
+      addLog(state, `Image URL: ${imageUrl.slice(0, 80)}...`);
+    }
+  } catch {
+    addLog(state, `Failed to parse image response: ${imageResult.response?.slice(0, 100)}`);
+  }
+
+  state.orchestration = {
+    ...state.orchestration,
+    imageUrl,
+    imageGenTx: imageResult.txHash,
+  };
+
+  if (imageResult.txHash) {
+    addLog(state, `Payment tx: ${imageResult.txHash}`);
+    state.txHashes = {
+      ...(state.txHashes ?? {}),
+      orchestrateImageGen: imageResult.txHash,
+    };
+  }
+
+  // Check balance after
+  const balanceAfter: bigint = await usdc.balanceOf(state.regA.smartAccount);
+  const spent = balanceBefore - balanceAfter;
+  addLog(state, `--- ORCHESTRATE DEAL: Complete ---`);
+  addLog(state, `Agent A USDC balance after: ${formatUnits(balanceAfter, USDC_DECIMALS)} USDC`);
+  addLog(state, `Total USDC spent: ${formatUnits(spent, USDC_DECIMALS)} USDC`);
+
+  // Update balances
+  state.balances = {
+    ...(state.balances ?? {}),
+    agentASmartUsdc: formatUnits(balanceAfter, USDC_DECIMALS),
+  };
+}
+
 async function stepPay(state: FlowState, provider: JsonRpcProvider) {
   assert(state.regA && state.regB && state.walletA && state.service, "Run register-service step first");
 
@@ -880,6 +1154,9 @@ async function main() {
   } else if (step === "pay") {
     await stepPay(state, provider);
     await flush("pay");
+  } else if (step === "orchestrate-deal") {
+    await stepOrchestrateDeal(state, provider);
+    await flush("orchestrate-deal");
   }
 }
 

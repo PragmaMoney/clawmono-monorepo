@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 type AgentKey = "A" | "B";
 type Facing = "down" | "left" | "right" | "up";
-type LogEntry = { ts: string; text: string };
+type LogEntry = { ts: string; text: string; imageUrl?: string };
+type SpeechContent = string | { type: 'image'; url: string; caption?: string };
 type SheetMeta = {
   frames: string[][];
   frameW: number;
@@ -18,7 +19,7 @@ type Sprite = {
   motionMs: number;
   facing: Facing;
   state: string;
-  speech?: string;
+  speech?: SpeechContent;
 };
 type SimState = {
   logs?: { ts: string; text: string }[];
@@ -32,6 +33,12 @@ type SimState = {
     agentBSmartUsdc?: string;
     poolAUsdc?: string;
     poolBUsdc?: string;
+  };
+  orchestration?: {
+    catFact?: string;
+    imageUrl?: string;
+    catfactTx?: string;
+    imageGenTx?: string;
   };
 };
 
@@ -134,6 +141,7 @@ export default function SimulationPage() {
   const [agentBPoolVisible, setAgentBPoolVisible] = useState(false);
   const [servicesRegistered, setServicesRegistered] = useState(false);
   const [agentAPayingServiceB, setAgentAPayingServiceB] = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
   const [activeStep, setActiveStep] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const simProxyUrl = (process.env.NEXT_PUBLIC_PROXY_URL || "http://localhost:4402").replace(/\/$/, "");
@@ -271,6 +279,27 @@ export default function SimulationPage() {
         return deduped.slice(-200);
       });
     }
+    // Handle orchestration results
+    if (state.orchestration) {
+      if (state.orchestration.catFact) {
+        say("A", `"${state.orchestration.catFact.slice(0, 50)}..."`, 3000);
+      }
+      if (state.orchestration.imageUrl) {
+        // Add image to logs
+        setLogs((prev) => [
+          ...prev,
+          {
+            ts: nowIso(),
+            text: "Generated cat image from fact!",
+            imageUrl: state.orchestration!.imageUrl,
+          },
+        ].slice(-200));
+        // Show image in speech bubble after text
+        window.setTimeout(() => {
+          say("A", { type: 'image', url: state.orchestration!.imageUrl!, caption: "Generated!" }, 5000);
+        }, 3500);
+      }
+    }
   };
 
   const applyResponseLogs = (rawLogs: string[] | undefined) => {
@@ -340,11 +369,13 @@ export default function SimulationPage() {
     return () => observer.disconnect();
   }, []);
 
-  const say = (agent: AgentKey, text: string, ms = 1400) => {
-    setAgents((prev) => ({ ...prev, [agent]: { ...prev[agent], speech: text } }));
+  const say = (agent: AgentKey, content: SpeechContent, ms = 1400) => {
+    setAgents((prev) => ({ ...prev, [agent]: { ...prev[agent], speech: content } }));
+    // Show images longer than text
+    const timeout = typeof content === 'object' && content.type === 'image' ? ms * 3 : ms;
     const timeoutId = window.setTimeout(() => {
       setAgents((prev) => ({ ...prev, [agent]: { ...prev[agent], speech: undefined } }));
-    }, ms);
+    }, timeout);
     timersRef.current.push(timeoutId);
   };
 
@@ -692,7 +723,8 @@ export default function SimulationPage() {
     agentBSeeding ||
     agentAServiceRegistering ||
     agentBServiceRegistering ||
-    agentAPayingServiceB;
+    agentAPayingServiceB ||
+    orchestrating;
   const initializingAgents = agentAInitializing || agentBInitializing;
   const registeringAgents = agentARegistering || agentBRegistering;
   const seedingPools = agentASeeding || agentBSeeding;
@@ -752,6 +784,15 @@ export default function SimulationPage() {
     setAgentAPayingServiceB(true);
     await callSimStep("pay");
     setAgentAPayingServiceB(false);
+  };
+
+  const handleOrchestrateDeal = async () => {
+    if (isActionRunning || !agentAPoolVisible) return;
+    setOrchestrating(true);
+    say("A", "Getting a cat fact...");
+    addLog("Agent A: Starting orchestrated deal flow...");
+    await callSimStep("orchestrate-deal");
+    setOrchestrating(false);
   };
   const idleFrame = (key: AgentKey) => {
     const meta = sheetMeta[key];
@@ -967,8 +1008,21 @@ export default function SimulationPage() {
                     }}
                   >
                     {sprite.speech && (
-                      <div className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/20 bg-black/75 px-2 py-1 text-[10px]">
-                        {sprite.speech}
+                      <div className={`absolute left-1/2 -translate-x-1/2 rounded-md border border-white/20 bg-black/75 px-2 py-1 text-[10px] ${typeof sprite.speech === 'object' && sprite.speech.type === 'image' ? '-top-36 max-w-36' : '-top-7 whitespace-nowrap'}`}>
+                        {typeof sprite.speech === 'string' ? (
+                          sprite.speech
+                        ) : sprite.speech.type === 'image' ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <img
+                              src={sprite.speech.url}
+                              alt="Generated"
+                              className="max-h-28 max-w-32 rounded"
+                            />
+                            {sprite.speech.caption && (
+                              <span className="text-[8px] text-white/70">{sprite.speech.caption}</span>
+                            )}
+                          </div>
+                        ) : null}
                       </div>
                     )}
                     <div style={style} />
@@ -1128,6 +1182,18 @@ export default function SimulationPage() {
                     </>
                   ) : "A Pays for B Service"}
                 </button>
+                <button
+                  onClick={handleOrchestrateDeal}
+                  disabled={isBusy || !agentAPoolVisible}
+                  className="sim-btn sim-btn-purple"
+                >
+                  {orchestrating ? (
+                    <>
+                      {renderControlSpinner()}
+                      Orchestrating Deal...
+                    </>
+                  ) : "Orchestrate Deal"}
+                </button>
                 <button onClick={() => callSimStep("reset")} disabled={isBusy} className="sim-btn">
                   Reset Demo
                 </button>
@@ -1144,6 +1210,15 @@ export default function SimulationPage() {
                   logs.map((log, idx) => (
                     <div key={`${log.ts}-${idx}`} className="whitespace-pre-wrap break-words text-emerald-200">
                       <span className="text-emerald-400/75">[{formatLogTs(log.ts)}]</span> {">"} {renderTxOrAddressText(log.text)}
+                      {log.imageUrl && (
+                        <div className="my-2">
+                          <img
+                            src={log.imageUrl}
+                            alt="Generated"
+                            className="max-h-48 max-w-full rounded border border-emerald-400/30"
+                          />
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -1198,6 +1273,11 @@ export default function SimulationPage() {
           border-color: rgba(245, 158, 11, 0.35);
           background: rgba(245, 158, 11, 0.18);
           color: #fef3c7;
+        }
+        .sim-btn-purple {
+          border-color: rgba(168, 85, 247, 0.35);
+          background: rgba(168, 85, 247, 0.18);
+          color: #e9d5ff;
         }
         @keyframes auraShift {
           0%,

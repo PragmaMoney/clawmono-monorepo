@@ -16,6 +16,7 @@ const ALLOWED_STEPS = new Set([
   "pay",
   "all",
   "reset",
+  "orchestrate-deal",
 ]);
 
 function parseJsonLines(output: string) {
