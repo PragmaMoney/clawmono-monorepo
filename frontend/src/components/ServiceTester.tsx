@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Service, FundingModel } from "@/types";
-import { Play, Plus, Trash2, Code, Edit3, ChevronDown } from "lucide-react";
+import { Play, Plus, Trash2, Code, Edit3, ChevronDown, Sparkles } from "lucide-react";
 import { ContentRenderer } from "./ContentRenderer";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,57 @@ interface Header {
   value: string;
 }
 
+interface SchemaProperty {
+  type?: string;
+  description?: string;
+  default?: unknown;
+  enum?: string[];
+}
+
+// Generate example value from schema property
+function generateExampleValue(prop: SchemaProperty): unknown {
+  if (prop.default !== undefined) return prop.default;
+  if (prop.enum && prop.enum.length > 0) return prop.enum[0];
+
+  switch (prop.type) {
+    case "string":
+      return prop.description?.toLowerCase().includes("url") ? "https://example.com" : "example";
+    case "number":
+    case "integer":
+      return 0;
+    case "boolean":
+      return true;
+    case "array":
+      return [];
+    case "object":
+      return {};
+    default:
+      return "";
+  }
+}
+
+// Generate example body from input schema
+function generateExampleBody(schema: Record<string, unknown> | null | undefined): string {
+  if (!schema) return "{\n  \n}";
+
+  const properties = schema.properties as Record<string, SchemaProperty> | undefined;
+  const required = schema.required as string[] | undefined;
+
+  if (!properties) return "{\n  \n}";
+
+  const example: Record<string, unknown> = {};
+
+  // Add required fields first, then optional with defaults
+  for (const [key, prop] of Object.entries(properties)) {
+    const isRequired = required?.includes(key);
+    if (isRequired || prop.default !== undefined) {
+      example[key] = generateExampleValue(prop);
+    }
+  }
+
+  return JSON.stringify(example, null, 2);
+}
+
 export function ServiceTester({
   service,
   onExecute,
@@ -42,10 +93,18 @@ export function ServiceTester({
   const [headersExpanded, setHeadersExpanded] = useState(false);
   const isNativeX402 = service.fundingModel === FundingModel.NATIVE_X402;
 
-  // Reset custom endpoint when service changes
+  // Reset custom endpoint and body when service changes
   useEffect(() => {
     setCustomEndpoint(service.endpoint);
-  }, [service.endpoint]);
+    // Auto-generate example body from schema
+    const inputSchema = service.schema?.input as Record<string, unknown> | undefined;
+    setBody(generateExampleBody(inputSchema));
+  }, [service.endpoint, service.schema]);
+
+  const handleResetExample = () => {
+    const inputSchema = service.schema?.input as Record<string, unknown> | undefined;
+    setBody(generateExampleBody(inputSchema));
+  };
 
   const handleAddHeader = () => {
     setHeaders([
@@ -191,15 +250,31 @@ export function ServiceTester({
         {/* Request Body (for POST/PUT/DELETE) */}
         {method !== "GET" && (
           <div className="mb-4">
-            <label className="block text-sm font-medium text-lobster-text mb-2">
-              Request Body (JSON)
-            </label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-lobster-text">
+                Request Body (JSON)
+              </label>
+              {service.schema?.input && (
+                <button
+                  onClick={handleResetExample}
+                  className="flex items-center space-x-1 text-sm text-lobster-primary hover:text-lobster-hover transition-colors duration-200"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Reset to Example</span>
+                </button>
+              )}
+            </div>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
               className="w-full h-40 input-field font-mono text-sm resize-none"
               placeholder='{\n  "key": "value"\n}'
             />
+            {service.schema?.input && (
+              <p className="text-xs text-lobster-text mt-1">
+                Example pre-filled from API schema. Edit values as needed.
+              </p>
+            )}
           </div>
         )}
 

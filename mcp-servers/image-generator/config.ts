@@ -22,8 +22,8 @@ export const config: MCPServiceConfig = {
           size: {
             type: "string",
             description: "Image dimensions",
-            enum: ["256x256", "512x512", "1024x1024"],
-            default: "512x512",
+            enum: ["1024x1024", "1024x1792", "1792x1024"],
+            default: "1024x1024",
           },
           style: {
             type: "string",

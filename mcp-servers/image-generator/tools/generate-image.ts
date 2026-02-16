@@ -78,11 +78,11 @@ async function generateWithOpenAI(input: GenerateImageArgs): Promise<string> {
   const OpenAI = (await import("openai")).default;
   const openai = new OpenAI({ apiKey: settings.openaiApiKey });
 
-  // Map size to OpenAI format
-  const sizeMap: Record<string, "256x256" | "512x512" | "1024x1024"> = {
-    "256x256": "256x256",
-    "512x512": "512x512",
+  // Map size to OpenAI DALL-E 3 format
+  const sizeMap: Record<string, "1024x1024" | "1024x1792" | "1792x1024"> = {
     "1024x1024": "1024x1024",
+    "1024x1792": "1024x1792",
+    "1792x1024": "1792x1024",
   };
 
   const response = await openai.images.generate({
