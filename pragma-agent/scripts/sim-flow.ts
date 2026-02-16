@@ -643,6 +643,21 @@ async function stepSeed(state: FlowState, provider: JsonRpcProvider) {
     addLog(state, `Pool pull tx (B): ${pullResultB.txHash}.`);
   }
 
+  // Fund EOA wallets with USDC for facilitator payments (orchestrate-deal)
+  const eoaUsdcAmount = parseUnits(process.env.EOA_USDC_AMOUNT || "0.1", USDC_DECIMALS);
+  for (const wallet of [state.walletA, state.walletB]) {
+    const eoaBal: bigint = await usdc.balanceOf(wallet.address);
+    if (eoaBal < eoaUsdcAmount) {
+      const tx = await usdc.transfer(wallet.address, eoaUsdcAmount);
+      await tx.wait();
+      state.txHashes = {
+        ...(state.txHashes ?? {}),
+        [`fundEoaUsdc_${wallet.address}`]: tx.hash,
+      };
+      addLog(state, `Funded EOA ${wallet.address} with ${formatUnits(eoaUsdcAmount, USDC_DECIMALS)} USDC for facilitator payments.`);
+    }
+  }
+
   const funderMon = await provider.getBalance(funder.address);
   const funderUsdc: bigint = await usdc.balanceOf(funder.address);
   const agentAMon = await provider.getBalance(state.regA.smartAccount);
