@@ -282,22 +282,31 @@ export default function SimulationPage() {
     // Handle orchestration results
     if (state.orchestration) {
       if (state.orchestration.catFact) {
-        say("A", `"${state.orchestration.catFact.slice(0, 50)}..."`, 3000);
-      }
-      if (state.orchestration.imageUrl) {
-        // Add image to logs
+        // Show cat fact in speech bubble for 4 seconds
+        say("A", `"${state.orchestration.catFact.slice(0, 60)}..."`, 4000);
+        // Add cat fact to logs
         setLogs((prev) => [
           ...prev,
           {
             ts: nowIso(),
-            text: "Generated cat image from fact!",
+            text: `Cat fact: "${state.orchestration!.catFact}"`,
+          },
+        ].slice(-200));
+      }
+      if (state.orchestration.imageUrl) {
+        // Add image to logs with the fact context
+        setLogs((prev) => [
+          ...prev,
+          {
+            ts: nowIso(),
+            text: "Generated image from cat fact!",
             imageUrl: state.orchestration!.imageUrl,
           },
         ].slice(-200));
-        // Show image in speech bubble after text
+        // Show image in speech bubble after text (wait for cat fact to finish)
         window.setTimeout(() => {
-          say("A", { type: 'image', url: state.orchestration!.imageUrl!, caption: "Generated!" }, 5000);
-        }, 3500);
+          say("A", { type: 'image', url: state.orchestration!.imageUrl!, caption: "Generated!" }, 8000);
+        }, 4500);
       }
     }
   };
@@ -1211,7 +1220,7 @@ export default function SimulationPage() {
 
             <div className="rounded-2xl border border-white/10 bg-black/50 p-4">
               <h2 className="font-display text-lg">Live Log</h2>
-              <div ref={liveLogRef} className="mt-3 max-h-[250px] overflow-auto rounded-lg border border-emerald-400/20 bg-black/70 p-3 font-mono text-xs">
+              <div ref={liveLogRef} className="mt-3 max-h-[400px] overflow-auto rounded-lg border border-emerald-400/20 bg-black/70 p-3 font-mono text-xs">
                 {logs.length === 0 ? (
                   <div className="text-emerald-300/70">&gt; waiting for activity...</div>
                 ) : (
@@ -1219,11 +1228,11 @@ export default function SimulationPage() {
                     <div key={`${log.ts}-${idx}`} className="whitespace-pre-wrap break-words text-emerald-200">
                       <span className="text-emerald-400/75">[{formatLogTs(log.ts)}]</span> {">"} {renderTxOrAddressText(log.text)}
                       {log.imageUrl && (
-                        <div className="my-2">
+                        <div className="my-3 rounded-lg border border-purple-400/40 bg-black/50 p-2 shadow-lg">
                           <img
                             src={log.imageUrl}
                             alt="Generated"
-                            className="max-h-48 max-w-full rounded border border-emerald-400/30"
+                            className="max-h-64 max-w-full rounded shadow-md"
                           />
                         </div>
                       )}

@@ -974,20 +974,49 @@ async function stepOrchestrateDeal(state: FlowState, provider: JsonRpcProvider) 
     throw new Error(`Image generation failed: ${imageResult.error}`);
   }
 
-  // Parse image response
+  // Parse image response - handles MCP content format or direct image_url
   let imageUrl: string | undefined;
   try {
     const imageJson = JSON.parse(imageResult.response ?? "{}") as {
       success?: boolean;
       image_url?: string;
       prompt_used?: string;
+      content?: Array<{ type: string; data?: string; mimeType?: string }>;
     };
-    imageUrl = imageJson.image_url;
+
+    // Check for MCP content format first (array of {type: "image", data: "..."})
+    const content = imageJson.content;
+    if (Array.isArray(content)) {
+      const imageItem = content.find((item) => item.type === "image");
+      if (imageItem?.data) {
+        // If data is base64 without prefix, add it
+        const isDataUrl = imageItem.data.startsWith("data:");
+        const isHttpUrl = imageItem.data.startsWith("http");
+        if (isDataUrl || isHttpUrl) {
+          imageUrl = imageItem.data;
+        } else {
+          // Assume base64, construct data URL
+          const mimeType = imageItem.mimeType || "image/png";
+          imageUrl = `data:${mimeType};base64,${imageItem.data}`;
+        }
+      }
+    }
+
+    // Fallback to direct image_url field
+    if (!imageUrl && imageJson.image_url) {
+      imageUrl = imageJson.image_url;
+    }
+
     addLog(state, `Image generated successfully!`);
     if (imageUrl) {
-      addLog(state, `Image URL: ${imageUrl.slice(0, 80)}...`);
+      const urlPreview = imageUrl.startsWith("data:")
+        ? `data:${imageUrl.slice(5, 30)}... (${Math.round(imageUrl.length / 1024)}KB)`
+        : imageUrl.slice(0, 80) + "...";
+      addLog(state, `Image URL: ${urlPreview}`);
+    } else {
+      addLog(state, `Warning: No image URL found in response`);
     }
-  } catch {
+  } catch (parseErr) {
     addLog(state, `Failed to parse image response: ${imageResult.response?.slice(0, 100)}`);
   }
 
