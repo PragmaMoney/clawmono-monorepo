@@ -965,7 +965,7 @@ async function stepOrchestrateDeal(state: FlowState, provider: JsonRpcProvider) 
 
   // Step 2: Generate an image using the cat fact as prompt
   addLog(state, `Step 2: Generating image from cat fact...`);
-  const imageGenEndpoint = process.env.IMAGE_GEN_ENDPOINT || "http://62.84.190.147:3099/image-generator/tools/generate_image";
+  const imageGenEndpoint = process.env.IMAGE_GEN_ENDPOINT || "https://mcp.clawmono.app/image-generator/tools/generate_image";
   const imagePrompt = `A cute cartoon cat illustrating: ${catFact.slice(0, 100)}`;
 
   addLog(state, `Image prompt: "${imagePrompt.slice(0, 60)}..."`);
