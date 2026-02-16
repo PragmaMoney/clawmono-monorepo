@@ -7,7 +7,7 @@ import { useServiceRegistry } from "@/hooks/useServiceRegistry";
 import { useX402Payment } from "@/hooks/useX402Payment";
 import { ServiceTester } from "@/components/ServiceTester";
 import { PaymentConfirm } from "@/components/PaymentConfirm";
-import { Service, PaymentInfo, SERVICE_TYPE_LABELS } from "@/types";
+import { Service, PaymentInfo, SERVICE_TYPE_LABELS, FundingModel } from "@/types";
 import { formatUSDC } from "@/lib/utils";
 import { ChevronDown, Info, AlertCircle, Code } from "lucide-react";
 import { useAccount } from "wagmi";
@@ -274,17 +274,21 @@ function PlaygroundContent() {
                   )}
 
                   <div>
-                    <p className="text-xs text-lobster-text mb-1">Endpoint</p>
-                    <p className="text-sm font-mono text-lobster-dark break-all">
-                      {selectedService.endpoint}
+                    <p className="text-xs text-lobster-text mb-1">
+                      {selectedService.fundingModel === FundingModel.NATIVE_X402
+                        ? "Direct Endpoint (Native x402)"
+                        : "Call URL"}
                     </p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs text-lobster-text mb-1">Proxy URL</p>
                     <p className="text-sm font-mono text-lobster-dark break-all">
-                      {proxyUrl}/proxy/{getProxyResourceId(selectedService)}
+                      {selectedService.fundingModel === FundingModel.NATIVE_X402
+                        ? selectedService.endpoint
+                        : `${proxyUrl}/proxy/${getProxyResourceId(selectedService)}`}
                     </p>
+                    {selectedService.fundingModel === FundingModel.NATIVE_X402 && (
+                      <p className="text-xs text-blue-600 mt-1">
+                        Service handles payments directly
+                      </p>
+                    )}
                   </div>
 
                   <div>
