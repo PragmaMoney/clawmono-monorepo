@@ -644,7 +644,8 @@ async function stepSeed(state: FlowState, provider: JsonRpcProvider) {
   }
 
   // Fund EOA wallets with USDC for facilitator payments (orchestrate-deal)
-  const eoaUsdcAmount = parseUnits(process.env.EOA_USDC_AMOUNT || "0.1", USDC_DECIMALS);
+  // Default 0.5 USDC allows ~10 image generations at $0.05 each
+  const eoaUsdcAmount = parseUnits(process.env.EOA_USDC_AMOUNT || "0.5", USDC_DECIMALS);
   for (const wallet of [state.walletA, state.walletB]) {
     const eoaBal: bigint = await usdc.balanceOf(wallet.address);
     if (eoaBal < eoaUsdcAmount) {
@@ -930,8 +931,19 @@ async function stepOrchestrateDeal(state: FlowState, provider: JsonRpcProvider) 
   assert(state.regA && state.walletA, "Run register step first");
 
   const usdc = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
+
+  // Check EOA has enough USDC for facilitator payment (image gen costs ~$0.05)
+  const eoaBalance: bigint = await usdc.balanceOf(state.walletA.address);
+  const minRequired = parseUnits("0.05", USDC_DECIMALS);
+  if (eoaBalance < minRequired) {
+    addLog(state, `EOA ${state.walletA.address} has ${formatUnits(eoaBalance, USDC_DECIMALS)} USDC`);
+    addLog(state, `Need at least 0.05 USDC for image generation. Run 'seed' step to top up.`);
+    throw new Error(`EOA has insufficient USDC (${formatUnits(eoaBalance, USDC_DECIMALS)}). Run seed step to top up.`);
+  }
+
   const balanceBefore: bigint = await usdc.balanceOf(state.regA.smartAccount);
   addLog(state, `--- ORCHESTRATE DEAL: Agent A Starting ---`);
+  addLog(state, `Agent A EOA: ${state.walletA.address} (${formatUnits(eoaBalance, USDC_DECIMALS)} USDC)`);
   addLog(state, `Agent A smart account: ${state.regA.smartAccount}`);
   addLog(state, `Agent A USDC balance: ${formatUnits(balanceBefore, USDC_DECIMALS)} USDC`);
 
