@@ -187,6 +187,49 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+function createRpcProvider(): JsonRpcProvider {
+  return new JsonRpcProvider(
+    RPC_URL,
+    undefined,
+    {
+      staticNetwork: true,
+      pollingInterval: Number(process.env.SIM_POLLING_INTERVAL_MS || "4000"),
+    }
+  );
+}
+
+function isRpcRateLimitError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("request limit reached") ||
+    message.includes("429") ||
+    message.includes("too many requests") ||
+    message.includes("code\":-32007") ||
+    message.includes("code: -32007")
+  );
+}
+
+async function withRateLimitRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxAttempts = Number(process.env.SIM_RPC_MAX_RETRIES || "5"),
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isLast = attempt >= maxAttempts;
+      if (!isRpcRateLimitError(err) || isLast) throw err;
+      const delayMs = Math.min(30_000, 1000 * 2 ** (attempt - 1));
+      console.error(
+        `[sim-flow] RPC rate limited during ${label}; retry ${attempt}/${maxAttempts} in ${delayMs}ms`
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error(`Unreachable retry state for ${label}`);
+}
+
 async function sendSequentialTx(
   funder: Wallet,
   provider: JsonRpcProvider,
@@ -631,7 +674,7 @@ async function stepSeed(state: FlowState, provider: JsonRpcProvider) {
 
 async function stepRegisterService(state: FlowState) {
   assert(state.regB && state.walletB, "Run register step first");
-  const provider = new JsonRpcProvider(RPC_URL);
+  const provider = createRpcProvider();
   const usdc = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
   const entryPoint = new Contract(
     ENTRYPOINT_ADDRESS,
@@ -1071,7 +1114,7 @@ async function main() {
   assert(BUNDLER_URL, "BUNDLER_URL is required");
 
   if (args.step === "reset") {
-    const provider = new JsonRpcProvider(RPC_URL);
+    const provider = createRpcProvider();
     const existing = await readState(args.runId);
     if (existing) {
       await sweepStateToFunder(provider, existing);
@@ -1086,7 +1129,7 @@ async function main() {
     return;
   }
 
-  const provider = new JsonRpcProvider(RPC_URL);
+  const provider = createRpcProvider();
   let state = (await readState(args.runId)) ?? {
     runId: args.runId,
     createdAt: nowIso(),
@@ -1129,30 +1172,30 @@ async function main() {
 
   const step = args.step;
   if (step === "all") {
-    await stepInit(state, provider);
+    await withRateLimitRetry(() => stepInit(state, provider), "init");
     await flush("init");
-    await stepRegister(state, provider);
+    await withRateLimitRetry(() => stepRegister(state, provider), "register");
     await flush("register");
-    await stepSeed(state, provider);
+    await withRateLimitRetry(() => stepSeed(state, provider), "seed");
     await flush("seed");
-    await stepRegisterService(state);
+    await withRateLimitRetry(() => stepRegisterService(state), "register-service");
     await flush("register-service");
-    await stepPay(state, provider);
+    await withRateLimitRetry(() => stepPay(state, provider), "pay");
     await flush("pay");
   } else if (step === "init") {
-    await stepInit(state, provider);
+    await withRateLimitRetry(() => stepInit(state, provider), "init");
     await flush("init");
   } else if (step === "register") {
-    await stepRegister(state, provider);
+    await withRateLimitRetry(() => stepRegister(state, provider), "register");
     await flush("register");
   } else if (step === "seed") {
-    await stepSeed(state, provider);
+    await withRateLimitRetry(() => stepSeed(state, provider), "seed");
     await flush("seed");
   } else if (step === "register-service") {
-    await stepRegisterService(state);
+    await withRateLimitRetry(() => stepRegisterService(state), "register-service");
     await flush("register-service");
   } else if (step === "pay") {
-    await stepPay(state, provider);
+    await withRateLimitRetry(() => stepPay(state, provider), "pay");
     await flush("pay");
   } else if (step === "orchestrate-deal") {
     await stepOrchestrateDeal(state, provider);
@@ -1165,7 +1208,7 @@ main().catch(async (err) => {
   try {
     const args = parseArgs(process.argv);
     if (args.step !== "reset") {
-      const provider = new JsonRpcProvider(RPC_URL);
+      const provider = createRpcProvider();
       const state = await readState(args.runId);
       if (state) {
         await sweepStateToFunder(provider, state);
