@@ -629,6 +629,14 @@ export default function SimulationPage() {
       setAgentIdleFacing("A", "right");
       setAgentIdleFacing("B", "left");
     }
+    if (step === "orchestrate-deal") {
+      await Promise.all([
+        moveAgentTo("A", { tx: 9, ty: 8 }, "walking"),
+        moveAgentTo("B", { tx: 15, ty: 8 }, "walking"),
+      ]);
+      setAgentIdleFacing("A", "right");
+      setAgentIdleFacing("B", "left");
+    }
   };
 
   const callSimStep = async (step: string) => {
