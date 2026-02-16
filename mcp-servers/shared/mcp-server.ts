@@ -100,7 +100,10 @@ export class MCPServer {
   }
 
   private setupMiddleware() {
-    this.app.use(cors());
+    this.app.use(cors({
+      origin: "*",
+      exposedHeaders: ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
+    }));
     this.app.use(express.json());
   }
 
